@@ -22,7 +22,20 @@ import {
   onAuthStateChanged,
   User,
 } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  getFirestore,
+  disableNetwork,
+  setLogLevel,
+  Firestore,
+} from 'firebase/firestore';
+
+// Suppress benign internal backend connection warnings when running in sandboxed or offline mode
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
 
 export interface LocalAnonymousUser {
   uid: string;
@@ -79,7 +92,35 @@ if (appInstance) {
 }
 
 export const auth = authInstance;
-export const db = appInstance ? getFirestore(appInstance) : null;
+
+// Resilient Firestore Initialization with long polling support
+let firestoreInstance: Firestore | null = null;
+if (appInstance) {
+  try {
+    firestoreInstance = initializeFirestore(appInstance, {
+      experimentalAutoDetectLongPolling: true,
+    });
+  } catch {
+    try {
+      firestoreInstance = getFirestore(appInstance);
+    } catch {
+      firestoreInstance = null;
+    }
+  }
+}
+
+// If no real API key is configured in the environment, gracefully disable network
+// so Firestore operates purely in local offline cache mode without attempting
+// to contact Google Cloud backend with unverified mock credentials.
+if (firestoreInstance && !isRealApiKeyConfigured) {
+  try {
+    disableNetwork(firestoreInstance).catch(() => {});
+  } catch {
+    // ignore
+  }
+}
+
+export const db = firestoreInstance;
 
 // Local session key in localStorage
 const LOCAL_ANON_UID_KEY = 'pinchat_anon_uid';

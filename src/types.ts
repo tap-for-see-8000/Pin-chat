@@ -3,61 +3,94 @@
  * Package / Identifier: com.aistudio.pinchat.kpmd
  */
 
-export interface UserProfile {
-  uid: string;
-  displayName: string;
-  mobileNumber: string; // 10 digits [PRIVATE]
-  villageCity: string;  // [PRIVATE]
-  pinCode: string;      // 6 digits [PRIVATE]
-  authProvider: 'anonymous';
+export interface UserRecord {
+  username: string; // e.g. "mohit8976" (Firestore document ID under 'users')
+  password: string; // e.g. "mohit9876"
+  fullName: string; // e.g. "Mohit Yadav"
+  mobileNumber: string; // 10 digits
+  villageCity: string;  // गांव / शहर
+  pinCode: string;      // 6 digits
   createdAt: number;
   updatedAt: number;
 }
 
-export type RelationshipMode = 'Dost' | 'GF/BF' | 'Wife/Husband' | 'Dost+GF';
-export type TargetGender = 'Male' | 'Female' | 'Other';
-export type RegionalLanguage = 'Hindi' | 'Hinglish' | 'Bhojpuri';
-
-export interface RoomAiConfig {
-  enabled: boolean;
-  relationshipMode: RelationshipMode;
-  targetGender: TargetGender;
-  language: RegionalLanguage;
-  isNewConnection: boolean;
-  autoReply: boolean;
+// Real-time user online presence
+export interface UserPresence {
+  isOnline: boolean;
+  lastSeen: number;
 }
 
-export interface Room {
-  pin: string; // 6-char uppercase alphanumeric
-  createdBy: string; // uid
-  memberCount: number; // Max 2
-  createdAt: number;
-  aiConfig: RoomAiConfig;
+// Public user profile when searched (never reveals password or private mobile)
+export interface PublicUserProfile {
+  username: string;
+  fullName: string;
+  villageCity?: string;
+  pinCode?: string;
+  presence?: UserPresence;
 }
 
-export interface RoomMember {
-  uid: string;
-  displayName: string;
-  joinedAt: number;
-}
-
+export type AutoReplyStyle = 'friend' | 'casual' | 'supportive' | 'professional';
 export type PersonaType = 'Friend' | 'Wife / Partner' | 'Professional Assistant' | 'Casual Buddy';
 
-export interface Message {
+export interface AutoReplySettingItem {
+  enabled: boolean;
+  style: AutoReplyStyle;
+}
+
+export interface ChatMessage {
   messageId: string;
-  senderUid: string;
+  chatId: string;
+  senderUsername: string;
   senderName: string;
   text: string;
   createdAt: number;
   isAi?: boolean;
-  status?: 'sent' | 'delivered';
+  isAIMessage?: boolean;
+  messageSource?: 'user_input' | 'ai_auto_reply';
+  aiProcessingStatus?: 'pending' | 'processing' | 'completed' | 'failed';
+  status?: 'sent' | 'delivered' | 'seen';
+  seenAt?: number;
+  deletedForEveryone?: boolean;
 }
 
-export type AppScreen =
-  | 'splash'
-  | 'profile'
-  | 'home'
-  | 'create-chat'
-  | 'join-chat'
-  | 'chat'
-  | 'raj-settings';
+// Room / ChatSession with Auto-Reply settings & memory summary
+export interface ChatSession {
+  chatId: string;
+  participants: string[];
+  participantNames?: { [username: string]: string };
+  autoReplySettings?: {
+    [username: string]: AutoReplySettingItem;
+  };
+  memorySummary?: string;
+  summaryUpToTimestamp?: number;
+  typingStatus?: {
+    [username: string]: boolean;
+  };
+  lastMessageText?: string;
+  lastMessageTime?: number;
+  updatedAt?: number;
+}
+
+// Conversation summary for Instagram-style Inbox
+export interface ChatConversation {
+  chatId: string;
+  otherUser: PublicUserProfile;
+  lastMessageText: string;
+  lastMessageTime: number;
+  unread?: boolean;
+  autoReplySettings?: {
+    [username: string]: AutoReplySettingItem;
+  };
+}
+
+export interface DecoyMessage {
+  id: string;
+  sender: string;
+  service: 'Amazon' | 'Zomato' | 'BlueDart' | 'Delhivery' | 'Support' | 'You';
+  text: string;
+  time: string;
+  isUser?: boolean;
+  badge?: string;
+}
+
+export type AppScreen = 'auth' | 'inbox' | 'chat';

@@ -63,3 +63,80 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #2d354b;
 }
+
+/* Cyberpunk Anime Neon Eye Keyframes */
+@keyframes eye-blink-anim {
+  0% { transform: scaleY(1); }
+  50% { transform: scaleY(0.01); }
+  100% { transform: scaleY(1); }
+}
+
+@keyframes hud-spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes hud-spin-reverse {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+
+@keyframes neon-pulse-red-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 10px rgba(255, 0, 85, 0.75)) drop-shadow(0 0 24px rgba(255, 0, 85, 0.45));
+    opacity: 0.88;
+  }
+  50% {
+    filter: drop-shadow(0 0 20px rgba(255, 0, 85, 0.98)) drop-shadow(0 0 40px rgba(255, 0, 85, 0.7));
+    opacity: 1;
+  }
+}
+
+@keyframes neon-pulse-green-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.75)) drop-shadow(0 0 24px rgba(0, 255, 136, 0.45));
+    opacity: 0.88;
+  }
+  50% {
+    filter: drop-shadow(0 0 20px rgba(0, 255, 136, 0.98)) drop-shadow(0 0 40px rgba(0, 255, 136, 0.7));
+    opacity: 1;
+  }
+}
+
+@keyframes ripple-ring {
+  0% {
+    r: 45px;
+    opacity: 0.85;
+  }
+  100% {
+    r: 140px;
+    opacity: 0;
+  }
+}
+
+.animate-eye-blink {
+  animation: eye-blink-anim 0.26s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  transform-origin: center center;
+}
+
+.animate-hud-spin {
+  animation: hud-spin-slow 24s linear infinite;
+  transform-origin: center center;
+}
+
+.animate-hud-spin-reverse {
+  animation: hud-spin-reverse 32s linear infinite;
+  transform-origin: center center;
+}
+
+.animate-neon-red {
+  animation: neon-pulse-red-glow 2.8s ease-in-out infinite;
+}
+
+.animate-neon-green {
+  animation: neon-pulse-green-glow 2.8s ease-in-out infinite;
+}
+
+.animate-ripple-pulse {
+  animation: ripple-ring 1s cubic-bezier(0.1, 0.8, 0.2, 1) forwards;
+}

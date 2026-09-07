@@ -1,6 +1,27 @@
 /**
- * PIN Chat - Chat Room Screen
- * Fixed: Headers authentication for new 'AQ.' Gemini API Keys + Robust Auto-Reply
+ * PIN Chat - Direct 1-on-1 Chat Room Screen
+ * Package: com.aistudio.pinchat.kpmd
+ * 
+ * Comprehensive Features:
+ * 1. Real-Time Partner Presence:
+ *    - Firestore `users/{username}/presence` tracking
+ *    - Header shows: "Online" + pulsating green dot OR "Last seen [X] mins ago"
+ * 2. Chat Bubbles & Sender Recognition:
+ *    - Outgoing (logged-in user): Strictly aligned RIGHT (amber/orange gradient bubble)
+ *    - Incoming (partner): Strictly aligned LEFT (dark slate bubble)
+ *    - Outgoing delivery status:
+ *      * Single tick (✓): Sent
+ *      * Double tick (✓✓) + small RED dot (🔴): Delivered (unread)
+ *      * Double tick (✓✓) + small GREEN dot (🟢): Seen / Read by partner
+ *    - Auto-marks incoming messages as 'seen' when viewed
+ * 3. Message Controls:
+ *    - 3-dot / Action menu on message:
+ *      * UNSEND FOR EVERYONE: Available ONLY within 120 seconds (2 minutes); removes from Firestore for both users
+ *      * DELETE PERMANENTLY: Always available; deletes locally & from Firestore
+ * 4. Stealth Gemini AI Auto-Reply:
+ *    - Triggers ONLY on incoming messages from partner (left-aligned)
+ *    - NEVER triggers on user's own messages (right-aligned)
+ *    - Sends under user's authentic name/bubble with NO 'AI' or 'Bot' labels
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
@@ -16,92 +37,133 @@ import {
   CheckCheck,
   MessageSquare,
   Shield,
-  Copy,
-  Check as CheckIcon,
   Bot,
+  ChevronDown,
+  MoreVertical,
+  Trash2,
+  RotateCcw,
+  Copy,
+  X,
+  Clock,
 } from 'lucide-react';
-import { UserProfile, Message, PersonaType } from '../types';
+import {
+  UserRecord,
+  PublicUserProfile,
+  ChatMessage,
+  PersonaType,
+  UserPresence,
+} from '../types';
+import {
+  saveConversationItem,
+  subscribeToUserPresence,
+  updateUserPresence,
+  formatLastSeen,
+  unsendFirestoreMessage,
+  deleteFirestoreMessage,
+} from '../userService';
 import { db } from '../firebase';
 import {
   collection,
   doc,
   setDoc,
+  updateDoc,
+  deleteDoc,
   onSnapshot,
   query,
   orderBy,
   serverTimestamp,
 } from 'firebase/firestore';
+import { CyberpunkAnimeEye } from './CyberpunkAnimeEye';
+import {
+  enqueueIncomingMessageForAutoReply,
+  getChatAutoReplySettings,
+  saveChatAutoReplySettings,
+} from '../services/aiAutoReplyEngine';
+import { AutoReplyStyle } from '../types';
 
 interface ChatRoomScreenProps {
-  pin: string;
-  user: Partial<UserProfile>;
+  chatId: string;
+  currentUser: UserRecord;
+  targetUser: PublicUserProfile;
   onBack: () => void;
 }
 
-const PERSONA_OPTIONS: PersonaType[] = [
-  'Friend',
-  'Wife / Partner',
-  'Professional Assistant',
-  'Casual Buddy',
+const STYLE_OPTIONS: { id: AutoReplyStyle; label: string }[] = [
+  { id: 'friend', label: 'Friend' },
+  { id: 'casual', label: 'Casual' },
+  { id: 'supportive', label: 'Supportive' },
+  { id: 'professional', label: 'Professional' },
 ];
 
 export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
-  pin,
-  user,
+  chatId,
+  currentUser,
+  targetUser,
   onBack,
 }) => {
   const [inputText, setInputText] = useState('');
   const [micActive, setMicActive] = useState(false);
   const [micNotice, setMicNotice] = useState<string | null>(null);
-  const [pinCopied, setPinCopied] = useState(false);
 
-  // Gemini AI Auto-Reply State
-  const [isAutoReplyEnabled, setIsAutoReplyEnabled] = useState<boolean>(true);
-  const [selectedPersona, setSelectedPersona] = useState<PersonaType>('Friend');
-  const [aiIsTyping, setAiIsTyping] = useState<boolean>(false);
+  // Stealth Gemini AI Auto-Reply State (Default ON, with selected Conversation Style)
+  const initialSettings = getChatAutoReplySettings(chatId, currentUser.username);
+  const [isAutoReplyEnabled, setIsAutoReplyEnabled] = useState<boolean>(initialSettings.enabled);
+  const [autoReplyStyle, setAutoReplyStyle] = useState<AutoReplyStyle>(initialSettings.style);
 
+  // Real-Time Partner Presence State
+  const [partnerPresence, setPartnerPresence] = useState<UserPresence>({
+    isOnline: false,
+    lastSeen: Date.now(),
+  });
+
+  // Action Menu State on individual messages
+  const [selectedMessageForAction, setSelectedMessageForAction] = useState<ChatMessage | null>(null);
+  const [toastNotice, setToastNotice] = useState<string | null>(null);
+
+  // Synchronized refs for listeners
   const isAutoReplyEnabledRef = useRef(isAutoReplyEnabled);
   isAutoReplyEnabledRef.current = isAutoReplyEnabled;
 
-  const selectedPersonaRef = useRef(selectedPersona);
-  selectedPersonaRef.current = selectedPersona;
+  const autoReplyStyleRef = useRef(autoReplyStyle);
+  autoReplyStyleRef.current = autoReplyStyle;
 
+  // Track processed messages to prevent duplicate AI triggers
   const processedMessageIdsRef = useRef<Set<string>>(new Set());
   const isFirstSnapshotRef = useRef<boolean>(true);
-  const isGeneratingReplyRef = useRef<boolean>(false);
 
-  // Network State
+  // Network Online/Offline state
   const [isOnline, setIsOnline] = useState<boolean>(
     typeof navigator !== 'undefined' ? navigator.onLine : true
   );
-  const [showBackOnlineNotice, setShowBackOnlineNotice] = useState<boolean>(false);
 
+  // Partner typing indicator
   const [partnerTyping, setPartnerTyping] = useState<{ isTyping: boolean; name: string }>({
     isTyping: false,
-    name: 'Partner',
+    name: targetUser.fullName || targetUser.username,
   });
 
-  const historyStorageKey = `pinchat_history_${pin}`;
+  // Storage key for persistent chat history
+  const historyStorageKey = `pinchat_messages_${chatId}`;
 
-  const [messages, setMessages] = useState<Message[]>(() => {
+  // Initial messages loader
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
       const saved = localStorage.getItem(historyStorageKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          const realMessages = parsed.filter(
+          const valid = parsed.filter(
             (m) =>
               m &&
-              m.messageId !== 'msg-preview-incoming' &&
-              m.messageId !== 'msg-preview-outgoing' &&
               typeof m.text === 'string' &&
-              m.text.trim().length > 0
+              m.text.trim().length > 0 &&
+              !m.deletedForEveryone
           );
-          return realMessages.sort((a, b) => a.createdAt - b.createdAt);
+          return valid.sort((a, b) => a.createdAt - b.createdAt);
         }
       }
-    } catch (e) {
-      console.warn('[PIN Chat] Error loading saved messages:', e);
+    } catch {
+      // ignore
     }
     return [];
   });
@@ -110,6 +172,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const broadcastChannelRef = useRef<BroadcastChannel | null>(null);
 
+  // Auto-scroll smoothly to latest message
   const scrollToBottom = useCallback((smooth = true) => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({
@@ -121,50 +184,192 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
 
   useEffect(() => {
     scrollToBottom(true);
-  }, [messages, partnerTyping.isTyping, aiIsTyping, scrollToBottom]);
+  }, [messages, partnerTyping.isTyping, scrollToBottom]);
 
+  // Persist messages locally
   useEffect(() => {
     try {
       localStorage.setItem(historyStorageKey, JSON.stringify(messages));
-    } catch (e) {
-      console.warn('[PIN Chat] Failed to save history:', e);
+    } catch {
+      // ignore
     }
   }, [messages, historyStorageKey]);
 
+  // 1. Subscribe to Real-Time Partner Presence
   useEffect(() => {
-    const handleOnline = () => {
-      setIsOnline(true);
-      setShowBackOnlineNotice(true);
-      const timer = setTimeout(() => setShowBackOnlineNotice(false), 3500);
-      return () => clearTimeout(timer);
-    };
-
-    const handleOffline = () => {
-      setIsOnline(false);
-      setShowBackOnlineNotice(false);
-    };
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    const unsubscribePresence = subscribeToUserPresence(targetUser.username, (presence) => {
+      setPartnerPresence(presence);
+    });
 
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      unsubscribePresence();
     };
-  }, []);
+  }, [targetUser.username]);
 
-  // Emit typing indicator
+  // 2. Maintain Logged-In User Presence Heartbeat & Event Listeners
+  useEffect(() => {
+    updateUserPresence(currentUser.username, true);
+
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        updateUserPresence(currentUser.username, true);
+      }
+    }, 25000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        updateUserPresence(currentUser.username, true);
+      } else {
+        updateUserPresence(currentUser.username, false);
+      }
+    };
+
+    const handleUnload = () => {
+      updateUserPresence(currentUser.username, false);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('beforeunload', handleUnload);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('beforeunload', handleUnload);
+    };
+  }, [currentUser.username]);
+
+  // Helper toast notifier
+  const showToast = (msg: string) => {
+    setToastNotice(msg);
+    setTimeout(() => {
+      setToastNotice(null);
+    }, 2500);
+  };
+
+  // Header Auto-Reply Toggle & Style change handlers
+  const handleToggleAutoReply = () => {
+    setIsAutoReplyEnabled((prev) => {
+      const next = !prev;
+      saveChatAutoReplySettings(chatId, currentUser.username, next, autoReplyStyle);
+      showToast(`Auto-Reply: ${next ? 'ON' : 'OFF'}`);
+      return next;
+    });
+  };
+
+  const handleChangeStyle = (newStyle: AutoReplyStyle) => {
+    setAutoReplyStyle(newStyle);
+    saveChatAutoReplySettings(chatId, currentUser.username, isAutoReplyEnabled, newStyle);
+    showToast(`Style set to ${newStyle.charAt(0).toUpperCase() + newStyle.slice(1)}`);
+  };
+
+  // 3. Dispatch Auto-Reply Pipeline via Stealth Engine
+  const dispatchAutoReplyForIncomingMessage = useCallback(
+    (incomingMsg: ChatMessage) => {
+      if (!isAutoReplyEnabledRef.current) return;
+
+      enqueueIncomingMessageForAutoReply({
+        message: incomingMsg,
+        chatId,
+        currentUsername: currentUser.username,
+        currentFullName: currentUser.fullName,
+        targetUser,
+        settings: {
+          enabled: isAutoReplyEnabledRef.current,
+          style: autoReplyStyleRef.current,
+        },
+        onMessageCommitted: (newMsg) => {
+          setMessages((prev) => {
+            if (prev.some((m) => m.messageId === newMsg.messageId)) return prev;
+            return [...prev, newMsg].sort((a, b) => a.createdAt - b.createdAt);
+          });
+        },
+        onTargetStatusUpdated: (targetId, status) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.messageId === targetId ? { ...m, aiProcessingStatus: status } : m
+            )
+          );
+        },
+      });
+    },
+    [chatId, currentUser.fullName, currentUser.username, targetUser]
+  );
+
+  // 4. Setup BroadcastChannel for Instant Cross-Tab Sync & Real-Time Typing
+  useEffect(() => {
+    const channelName = `pinchat_channel_${chatId}`;
+    let channel: BroadcastChannel | null = null;
+
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel(channelName);
+        broadcastChannelRef.current = channel;
+
+        channel.onmessage = (event) => {
+          const data = event.data;
+          if (!data) return;
+
+          if (data.type === 'new_message' && data.message) {
+            const incoming: ChatMessage = data.message;
+            if (incoming.chatId === chatId) {
+              setMessages((prev) => {
+                if (prev.some((m) => m.messageId === incoming.messageId)) return prev;
+                return [...prev, incoming].sort((a, b) => a.createdAt - b.createdAt);
+              });
+              saveConversationItem(currentUser.username, targetUser, incoming.text, incoming.createdAt);
+
+              // Auto-reply pipeline check for rapid incoming cross-tab messages
+              if (
+                incoming.senderUsername.toLowerCase() !== currentUser.username.toLowerCase() &&
+                isAutoReplyEnabledRef.current &&
+                !processedMessageIdsRef.current.has(incoming.messageId)
+              ) {
+                processedMessageIdsRef.current.add(incoming.messageId);
+                dispatchAutoReplyForIncomingMessage(incoming);
+              }
+            }
+          } else if (data.type === 'typing_status') {
+            if (data.username !== currentUser.username.toLowerCase()) {
+              setPartnerTyping({
+                isTyping: Boolean(data.isTyping),
+                name: data.senderName || targetUser.fullName,
+              });
+            }
+          } else if (data.type === 'messages_seen') {
+            // Partner saw our messages
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.senderUsername.toLowerCase() === currentUser.username.toLowerCase()
+                  ? { ...m, status: 'seen', seenAt: Date.now() }
+                  : m
+              )
+            );
+          } else if (data.type === 'unsend_message' || data.type === 'delete_message') {
+            if (data.messageId) {
+              setMessages((prev) => prev.filter((m) => m.messageId !== data.messageId));
+            }
+          }
+        };
+      }
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      if (channel) channel.close();
+      broadcastChannelRef.current = null;
+    };
+  }, [chatId, currentUser.username, dispatchAutoReplyForIncomingMessage, targetUser]);
+
+  // 5. Emit Current User Typing State
   const emitTypingState = useCallback(
-    (isTyping: boolean) => {
-      const myUid = user.uid || 'current-user-id';
-      const myName = user.displayName || 'Mohit';
-
+    (isTyping: boolean, senderName = currentUser.fullName) => {
       if (broadcastChannelRef.current) {
         try {
           broadcastChannelRef.current.postMessage({
-            type: 'typing',
-            senderUid: myUid,
-            senderName: myName,
+            type: 'typing_status',
+            username: currentUser.username.toLowerCase(),
+            senderName,
             isTyping,
           });
         } catch {
@@ -172,15 +377,16 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         }
       }
 
-      if (db && myUid) {
+      if (db) {
         try {
-          const typingDocRef = doc(db, 'rooms', pin, 'typing', myUid);
+          const typingDocRef = doc(db, 'chats', chatId, 'typing', currentUser.username.toLowerCase());
           setDoc(
             typingDocRef,
             {
               isTyping,
-              senderName: myName,
-              updatedAt: Date.now(),
+              username: currentUser.username.toLowerCase(),
+              senderName,
+              updatedAt: serverTimestamp(),
             },
             { merge: true }
           ).catch(() => {});
@@ -189,327 +395,173 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         }
       }
     },
-    [pin, user.displayName, user.uid]
+    [chatId, currentUser.fullName, currentUser.username]
   );
 
-  // Gemini API Trigger with Header Authentication for AQ. keys
-  const triggerAiAutoReply = useCallback(
-    async (incomingMsg: Message) => {
-      if (isGeneratingReplyRef.current) return;
-      isGeneratingReplyRef.current = true;
-      setAiIsTyping(true);
-
-      const persona = selectedPersonaRef.current;
-      const personaName = `${persona} (AI)`;
-
-      try {
-        const apiKey =
-          (import.meta.env.VITE_GEMINI_API_KEY as string) ||
-          (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') ||
-          '';
-
-        const systemInstruction = `You are a real close partner in a private live chat acting as ${persona}. Respond in Hindi, Hinglish, or English matching the user. Reply in 1 short, natural, conversational sentence. Never say you are an AI or bot.`;
-
-        let replyText = '';
-
-        if (apiKey) {
-          // AQ. format requires the key in the x-goog-api-key header
-          const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-
-          const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-goog-api-key': apiKey.trim(),
-            },
-            body: JSON.stringify({
-              contents: [
-                {
-                  role: 'user',
-                  parts: [
-                    {
-                      text: `${systemInstruction}\n\nIncoming message: "${incomingMsg.text}"\nReply directly:`,
-                    },
-                  ],
-                },
-              ],
-              generationConfig: {
-                temperature: 0.7,
-                maxOutputTokens: 120,
-              },
-            }),
+  // 6. Real-Time Firestore Typing Listener for Partner
+  useEffect(() => {
+    if (!db) return;
+    try {
+      const partnerClean = targetUser.username.trim().toLowerCase();
+      const typingDocRef = doc(db, 'chats', chatId, 'typing', partnerClean);
+      const unsub = onSnapshot(typingDocRef, (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          const isTyping = Boolean(data.isTyping);
+          setPartnerTyping({
+            isTyping,
+            name: data.senderName || targetUser.fullName || targetUser.username,
           });
-
-          if (res.ok) {
-            const data = await res.json();
-            replyText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
-          } else {
-            console.error('[PIN Chat] Gemini API call status:', res.status);
-          }
         }
+      });
+      return () => unsub();
+    } catch {
+      // ignore
+    }
+  }, [chatId, targetUser.fullName, targetUser.username]);
 
-        // Fallback agar API block ya fail ho
-        if (!replyText) {
-          if (persona === 'Friend') {
-            replyText = 'Haan bhai, sab badhiya! Bol kya chal raha hai?';
-          } else if (persona === 'Wife / Partner') {
-            replyText = 'Haan bolo ji, sun rahi hoon! Sab theek hai na?';
-          } else {
-            replyText = 'Haan, maine aapka message dekh liya!';
-          }
-        }
-
-        // Short natural delay
-        await new Promise((r) => setTimeout(r, 700));
-
-        const messageId = `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-        const aiMsg: Message = {
-          messageId,
-          senderUid: 'ai-persona-uid',
-          senderName: personaName,
-          text: replyText,
-          createdAt: Date.now(),
-          isAi: true,
-          status: 'delivered',
-        };
-
-        processedMessageIdsRef.current.add(messageId);
-        setMessages((prev) => [...prev, aiMsg]);
-
-        if (broadcastChannelRef.current) {
-          try {
-            broadcastChannelRef.current.postMessage({
-              type: 'new_message',
-              message: aiMsg,
-            });
-          } catch {
-            // ignore
-          }
-        }
-
-        if (db) {
-          try {
-            const msgDocRef = doc(db, 'rooms', pin, 'messages', messageId);
-            await setDoc(msgDocRef, {
-              senderUid: 'ai-persona-uid',
-              senderName: personaName,
-              text: replyText,
-              createdAt: serverTimestamp(),
-              isAi: true,
-              status: 'delivered',
-            });
-          } catch (err) {
-            console.warn('[PIN Chat] Error saving AI message:', err);
-          }
-        }
-      } catch (err) {
-        console.error('[PIN Chat] Error generating reply:', err);
-      } finally {
-        setAiIsTyping(false);
-        isGeneratingReplyRef.current = false;
-      }
-    },
-    [pin]
-  );
-
-  // Firestore Messages & Typing listeners
+  // 6. Firestore Real-Time Listener for Messages & Marking Incoming Messages as Seen
   useEffect(() => {
     if (!db) return;
 
-    const messagesRef = collection(db, 'rooms', pin, 'messages');
-    const q = query(messagesRef, orderBy('createdAt', 'asc'));
+    try {
+      const messagesColl = collection(db, 'chats', chatId, 'messages');
+      const q = query(messagesColl, orderBy('createdAt', 'asc'));
 
-    const unsubscribeMessages = onSnapshot(
-      q,
-      (snapshot) => {
-        if (!snapshot.empty) {
-          const remoteMessages: Message[] = [];
-          const newIncoming: Message[] = [];
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          if (snapshot.empty) {
+            isFirstSnapshotRef.current = false;
+            return;
+          }
+
+          const remoteMsgs: ChatMessage[] = [];
+          const unreadPartnerMsgIds: string[] = [];
 
           snapshot.forEach((docSnap) => {
             const data = docSnap.data();
-            const msgId = docSnap.id;
-            const msg: Message = {
-              messageId: msgId,
-              senderUid: data.senderUid || '',
-              senderName: data.senderName || 'Anonymous',
+            const createdAtMillis = data.createdAt?.toMillis
+              ? data.createdAt.toMillis()
+              : typeof data.createdAt === 'number'
+              ? data.createdAt
+              : Date.now();
+
+            const msg: ChatMessage = {
+              messageId: docSnap.id,
+              chatId: data.chatId || chatId,
+              senderUsername: data.senderUsername || '',
+              senderName: data.senderName || '',
               text: data.text || '',
-              createdAt: data.createdAt?.toMillis
-                ? data.createdAt.toMillis()
-                : data.createdAt || Date.now(),
-              isAi: data.isAi || false,
+              createdAt: createdAtMillis,
+              isAi: data.isAi,
               status: data.status || 'delivered',
+              seenAt: data.seenAt,
+              deletedForEveryone: data.deletedForEveryone,
             };
 
-            remoteMessages.push(msg);
+            if (!msg.deletedForEveryone) {
+              remoteMsgs.push(msg);
 
-            // Har naye insaan ke message par reply trigger karein
+              // If partner sent this message and it's not marked seen yet, prepare to mark seen
+              if (
+                msg.senderUsername.toLowerCase() !== currentUser.username.toLowerCase() &&
+                msg.status !== 'seen'
+              ) {
+                unreadPartnerMsgIds.push(msg.messageId);
+              }
+            }
+          });
+
+          // Mark incoming unread partner messages as 'seen' in Firestore
+          if (unreadPartnerMsgIds.length > 0) {
+            unreadPartnerMsgIds.forEach((mId) => {
+              try {
+                const mRef = doc(db, 'chats', chatId, 'messages', mId);
+                updateDoc(mRef, {
+                  status: 'seen',
+                  seenAt: Date.now(),
+                }).catch(() => {});
+              } catch {
+                // ignore
+              }
+            });
+
+            // Notify partner tab that their messages have been seen
+            if (broadcastChannelRef.current) {
+              try {
+                broadcastChannelRef.current.postMessage({
+                  type: 'messages_seen',
+                  viewer: currentUser.username.toLowerCase(),
+                });
+              } catch {
+                // ignore
+              }
+            }
+          }
+
+          // Trigger Stealth Gemini AI if new incoming partner message arrived
+          if (!isFirstSnapshotRef.current && isAutoReplyEnabledRef.current) {
+            const latestMsg = remoteMsgs[remoteMsgs.length - 1];
             if (
-              !isFirstSnapshotRef.current &&
-              !processedMessageIdsRef.current.has(msgId) &&
-              !msg.isAi
+              latestMsg &&
+              latestMsg.senderUsername.toLowerCase() !== currentUser.username.toLowerCase() &&
+              !processedMessageIdsRef.current.has(latestMsg.messageId)
             ) {
-              newIncoming.push(msg);
-            }
-
-            processedMessageIdsRef.current.add(msgId);
-          });
-
-          if (remoteMessages.length > 0) {
-            setMessages((prev) => {
-              const map = new Map<string, Message>();
-              prev.forEach((m) => map.set(m.messageId, m));
-              remoteMessages.forEach((m) => map.set(m.messageId, m));
-              return Array.from(map.values()).sort((a, b) => a.createdAt - b.createdAt);
-            });
-          }
-
-          if (
-            !isFirstSnapshotRef.current &&
-            isAutoReplyEnabledRef.current &&
-            newIncoming.length > 0
-          ) {
-            const latest = newIncoming[newIncoming.length - 1];
-            triggerAiAutoReply(latest);
-          }
-
-          isFirstSnapshotRef.current = false;
-        } else {
-          isFirstSnapshotRef.current = false;
-        }
-      },
-      (err) => {
-        console.warn('[PIN Chat] Messages sync warning:', err.message);
-      }
-    );
-
-    const typingColRef = collection(db, 'rooms', pin, 'typing');
-    const unsubscribeTyping = onSnapshot(
-      typingColRef,
-      (snapshot) => {
-        const myUid = user.uid || 'current-user-id';
-        let isSomeoneTyping = false;
-        let typingName = 'Partner';
-
-        snapshot.forEach((docSnap) => {
-          if (docSnap.id !== myUid) {
-            const data = docSnap.data();
-            const isFresh = Date.now() - (data.updatedAt || 0) < 4000;
-            if (data.isTyping && isFresh) {
-              isSomeoneTyping = true;
-              typingName = data.senderName || 'Partner';
+              processedMessageIdsRef.current.add(latestMsg.messageId);
+              dispatchAutoReplyForIncomingMessage(latestMsg);
             }
           }
-        });
 
-        setPartnerTyping({
-          isTyping: isSomeoneTyping,
-          name: typingName,
-        });
-      },
-      (err) => {
-        console.warn('[PIN Chat] Typing sync warning:', err.message);
-      }
-    );
+          remoteMsgs.forEach((m) => processedMessageIdsRef.current.add(m.messageId));
+          isFirstSnapshotRef.current = false;
 
-    return () => {
-      unsubscribeMessages();
-      unsubscribeTyping();
-    };
-  }, [pin, triggerAiAutoReply, user.uid]);
+          setMessages(remoteMsgs);
 
-  // BroadcastChannel Sync
-  useEffect(() => {
-    let channel: BroadcastChannel | null = null;
-    try {
-      channel = new BroadcastChannel(`pinchat_room_${pin}`);
-      broadcastChannelRef.current = channel;
-
-      channel.onmessage = (event) => {
-        const data = event.data;
-        if (!data || typeof data !== 'object') return;
-
-        if (data.type === 'typing') {
-          if (data.senderUid !== (user.uid || 'current-user-id')) {
-            setPartnerTyping({
-              isTyping: Boolean(data.isTyping),
-              name: data.senderName || 'Partner',
-            });
+          // Update parent conversation summary
+          if (remoteMsgs.length > 0) {
+            const last = remoteMsgs[remoteMsgs.length - 1];
+            saveConversationItem(currentUser.username, targetUser, last.text, last.createdAt);
           }
+        },
+        (err) => {
+          console.warn('[ChatRoom] Firestore messages listener note:', err.message);
         }
+      );
 
-        if (data.type === 'new_message' && data.message) {
-          const incoming: Message = data.message;
-
-          setMessages((prev) => {
-            if (prev.some((m) => m.messageId === incoming.messageId)) return prev;
-            return [...prev, incoming].sort((a, b) => a.createdAt - b.createdAt);
-          });
-
-          if (
-            isAutoReplyEnabledRef.current &&
-            !processedMessageIdsRef.current.has(incoming.messageId) &&
-            !incoming.isAi
-          ) {
-            processedMessageIdsRef.current.add(incoming.messageId);
-            triggerAiAutoReply(incoming);
-          }
-
-          setPartnerTyping((prev) => ({ ...prev, isTyping: false }));
-        }
-      };
-    } catch (err) {
-      console.warn('[PIN Chat] BroadcastChannel warning:', err);
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('[ChatRoom] Firestore listener setup notice:', e);
     }
+  }, [chatId, currentUser.username, dispatchAutoReplyForIncomingMessage, targetUser]);
 
-    return () => {
-      if (channel) channel.close();
-    };
-  }, [pin, triggerAiAutoReply, user.uid]);
-
-  // Typing handler
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setInputText(val);
-
-    if (val.trim().length > 0) {
-      emitTypingState(true);
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-      typingTimeoutRef.current = setTimeout(() => emitTypingState(false), 2000);
-    } else {
-      emitTypingState(false);
-      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    }
-  };
-
-  // Send message
-  const handleSendMessage = (e?: React.FormEvent) => {
+  // 7. Send Message Handler
+  const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const text = inputText.trim();
-    if (!text) return;
+    const cleanText = inputText.trim();
+    if (!cleanText) return;
 
-    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    emitTypingState(false);
-
+    const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const now = Date.now();
-    const messageId = `msg-${now}-${Math.random().toString(36).slice(2, 6)}`;
-    const myUid = user.uid || 'current-user-id';
-    const myName = user.displayName || 'Mohit';
 
-    const newMsg: Message = {
+    const newMsg: ChatMessage = {
       messageId,
-      senderUid: myUid,
-      senderName: myName,
-      text,
+      chatId,
+      senderUsername: currentUser.username,
+      senderName: currentUser.fullName,
+      text: cleanText,
       createdAt: now,
-      isAi: false,
       status: 'sent',
     };
 
     setInputText('');
-    setMessages((prev) => [...prev, newMsg]);
+    emitTypingState(false);
 
-    // Send to other devices
+    // Optimistic UI update
+    setMessages((prev) => [...prev, newMsg]);
+    saveConversationItem(currentUser.username, targetUser, cleanText, now);
+
+    // Broadcast to local tabs
     if (broadcastChannelRef.current) {
       try {
         broadcastChannelRef.current.postMessage({
@@ -521,230 +573,444 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
       }
     }
 
-    // Auto-reply trigger (works even if testing alone on same phone)
-    if (isAutoReplyEnabledRef.current) {
-      setTimeout(() => {
-        triggerAiAutoReply(newMsg);
-      }, 400);
-    }
-
-    setTimeout(() => {
-      setMessages((prev) =>
-        prev.map((m) => (m.messageId === messageId ? { ...m, status: 'delivered' } : m))
-      );
-    }, 400);
-
+    // Persist to Firestore
     if (db) {
       try {
-        const msgDocRef = doc(db, 'rooms', pin, 'messages', messageId);
-        setDoc(msgDocRef, {
-          senderUid: myUid,
-          senderName: myName,
-          text,
+        const msgDocRef = doc(db, 'chats', chatId, 'messages', messageId);
+        await setDoc(msgDocRef, {
+          messageId,
+          chatId,
+          senderUsername: currentUser.username,
+          senderName: currentUser.fullName,
+          text: cleanText,
           createdAt: serverTimestamp(),
-          isAi: false,
           status: 'delivered',
-        }).catch(() => {});
-      } catch {
-        // ignore
+        });
+      } catch (err) {
+        console.warn('[ChatRoom] Message written to local cache:', err);
       }
     }
   };
 
-  const handleCopyPin = async () => {
-    try {
-      await navigator.clipboard.writeText(pin);
-      setPinCopied(true);
-      setTimeout(() => setPinCopied(false), 2000);
-    } catch {
-      setPinCopied(true);
-      setTimeout(() => setPinCopied(false), 2000);
+  // 8. Unsend for Everyone (within 120 seconds / 2 minutes)
+  const handleUnsendForEveryone = async (msg: ChatMessage) => {
+    const elapsedSeconds = (Date.now() - msg.createdAt) / 1000;
+    if (elapsedSeconds > 120) {
+      showToast('Unsend is only allowed within 2 minutes of sending.');
+      setSelectedMessageForAction(null);
+      return;
     }
+
+    // Remove from local state
+    setMessages((prev) => prev.filter((m) => m.messageId !== msg.messageId));
+    setSelectedMessageForAction(null);
+
+    // Broadcast removal
+    if (broadcastChannelRef.current) {
+      try {
+        broadcastChannelRef.current.postMessage({
+          type: 'unsend_message',
+          messageId: msg.messageId,
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    // Delete in Firestore
+    await unsendFirestoreMessage(chatId, msg.messageId);
+    showToast('Message unsent for everyone');
   };
 
-  const handleMicClick = () => {
-    setMicActive(true);
-    setMicNotice('Listening...');
-    setTimeout(() => {
-      setMicActive(false);
-      setMicNotice(null);
+  // 9. Delete Permanently (Always available)
+  const handleDeletePermanently = async (msg: ChatMessage) => {
+    setMessages((prev) => prev.filter((m) => m.messageId !== msg.messageId));
+    setSelectedMessageForAction(null);
+
+    if (broadcastChannelRef.current) {
+      try {
+        broadcastChannelRef.current.postMessage({
+          type: 'delete_message',
+          messageId: msg.messageId,
+        });
+      } catch {
+        // ignore
+      }
+    }
+
+    await deleteFirestoreMessage(chatId, msg.messageId);
+    showToast('Message deleted permanently');
+  };
+
+  // 10. Copy Message Text
+  const handleCopyMessage = (text: string) => {
+    navigator.clipboard.writeText(text);
+    showToast('Message copied to clipboard');
+    setSelectedMessageForAction(null);
+  };
+
+  // Input change with typing emitter
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setInputText(e.target.value);
+    emitTypingState(true);
+
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      emitTypingState(false);
     }, 2000);
   };
 
-  const formatTimestamp = (timestamp: number) => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+  // Microphone helper
+  const handleMicClick = () => {
+    const SpeechRecognition =
+      (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any })
+        .SpeechRecognition ||
+      (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any })
+        .webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setMicNotice('Voice speech recognition not supported in this browser.');
+      setTimeout(() => setMicNotice(null), 3000);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'hi-IN,en-IN';
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        setMicActive(true);
+        setMicNotice('Listening... Speak now');
+      };
+
+      recognition.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        if (transcript) {
+          setInputText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+        }
+      };
+
+      recognition.onerror = () => {
+        setMicActive(false);
+        setMicNotice('Microphone access unavailable or timed out.');
+        setTimeout(() => setMicNotice(null), 3000);
+      };
+
+      recognition.onend = () => {
+        setMicActive(false);
+        setMicNotice(null);
+      };
+
+      recognition.start();
+    } catch {
+      setMicActive(false);
+    }
   };
+
+  const formatTimestamp = (ts: number) => {
+    return new Date(ts).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  // 11. Calculate latest outgoing message status for Cyberpunk Anime Eye dynamic background
+  const latestOutgoingMessage = [...messages]
+    .reverse()
+    .find(
+      (m) =>
+        (m.senderUsername || '').trim().toLowerCase() ===
+        currentUser.username.trim().toLowerCase()
+    );
+
+  // If there's an outgoing message:
+  // - status === 'seen' => isEyeSeen = true (Neon Green + triggers blink transition)
+  // - status === 'sent' || 'delivered' => isEyeSeen = false (Pulsing Neon Crimson Red)
+  // If no outgoing message exists yet: default to true (ready / green)
+  const isEyeSeen = latestOutgoingMessage
+    ? latestOutgoingMessage.status === 'seen'
+    : true;
+
+  const eyeStatusKey = latestOutgoingMessage
+    ? `${latestOutgoingMessage.messageId}_${latestOutgoingMessage.status}`
+    : 'none';
 
   return (
     <div
-      id="chat-room-screen"
-      className="w-full h-screen flex flex-col bg-[#07090e] text-slate-100 select-none overflow-hidden relative"
+      id="chatroom-screen"
+      className="w-full h-screen bg-[#07090e] text-slate-100 flex flex-col justify-between select-none relative overflow-hidden"
     >
-      <div className="absolute top-10 left-1/2 -translate-x-1/2 w-96 h-40 bg-amber-500/5 rounded-full blur-3xl pointer-events-none" />
-
-      {/* Header */}
+      {/* 1. Chat Header */}
       <header
         id="chatHeader"
         className="w-full px-3 sm:px-4 py-2.5 bg-[#0f121a]/95 backdrop-blur-xl border-b border-white/10 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 shadow-lg"
       >
+        {/* Left: Back button & Target User Profile with Real-time Presence */}
         <div className="flex items-center gap-2 sm:gap-3">
           <button
             id="chatBackBtn"
             onClick={onBack}
             className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer active:scale-95"
-            title="Back"
+            title="Back to Inbox"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          <div>
-            <div className="flex items-center gap-1.5 sm:gap-2">
-              <span className="text-[10px] text-slate-400 uppercase font-mono tracking-wider">
-                ROOM:
-              </span>
-              <span
-                id="headerRoomPin"
-                className="text-xs sm:text-sm font-mono font-bold tracking-widest text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-lg border border-amber-500/30"
-              >
-                PIN: {pin}
-              </span>
-              <button
-                id="copyRoomPinHeaderBtn"
-                onClick={handleCopyPin}
-                className="p-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-300 hover:text-amber-400 transition-all cursor-pointer active:scale-95"
-              >
-                {pinCopied ? (
-                  <CheckIcon className="w-3.5 h-3.5 text-emerald-400" />
-                ) : (
-                  <Copy className="w-3.5 h-3.5 text-amber-400" />
-                )}
-              </button>
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500/30 to-amber-700/30 border border-amber-500/40 flex items-center justify-center text-amber-300 font-bold text-sm shrink-0">
+              {targetUser.fullName.charAt(0).toUpperCase()}
             </div>
-            <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5 font-mono">
-              <span
-                className={`w-1.5 h-1.5 rounded-full ${
-                  isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
-                }`}
-              />
-              <span>{isOnline ? 'ONLINE & SECURE' : 'OFFLINE'}</span>
+
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs sm:text-sm font-bold text-white leading-tight truncate max-w-[150px] sm:max-w-[200px]">
+                  {targetUser.fullName}
+                </span>
+
+                {/* Pulsating green dot if Online */}
+                {partnerPresence.isOnline ? (
+                  <span
+                    className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.9)] shrink-0"
+                    title="Online"
+                  />
+                ) : (
+                  <span
+                    className="w-2 h-2 rounded-full bg-slate-500 shrink-0"
+                    title="Offline"
+                  />
+                )}
+              </div>
+
+              {/* Status text: "Online" OR "Last seen [X] mins ago" */}
+              <div className="flex items-center gap-1.5 text-[11px] font-mono leading-tight">
+                <span className="text-amber-400/90">@{targetUser.username}</span>
+                <span className="text-slate-500">•</span>
+                {partnerPresence.isOnline ? (
+                  <span className="text-emerald-400 font-semibold">
+                    Online
+                  </span>
+                ) : (
+                  <span className="text-slate-400">
+                    Last seen {formatLastSeen(partnerPresence.lastSeen)}
+                  </span>
+                )}
+              </div>
             </div>
           </div>
         </div>
 
+        {/* Right: Stealth Gemini AI Auto-Reply Controls */}
         <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+          {/* Conversation Style Selector Dropdown */}
           <div className="flex items-center gap-1.5 bg-[#161b26] border border-white/10 px-2.5 py-1.5 rounded-xl text-xs">
-            <Bot className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <select
-              id="personaSelectorDropdown"
-              value={selectedPersona}
-              onChange={(e) => setSelectedPersona(e.target.value as PersonaType)}
+              id="conversationStyleDropdown"
+              value={autoReplyStyle}
+              onChange={(e) => handleChangeStyle(e.target.value as AutoReplyStyle)}
               className="bg-transparent text-amber-300 text-xs font-medium focus:outline-none cursor-pointer pr-1"
+              title="Select Conversation Style"
             >
-              {PERSONA_OPTIONS.map((persona) => (
-                <option key={persona} value={persona} className="bg-[#161b26] text-slate-200">
-                  {persona}
+              {STYLE_OPTIONS.map((styleOpt) => (
+                <option
+                  key={styleOpt.id}
+                  value={styleOpt.id}
+                  className="bg-[#161b26] text-slate-200"
+                >
+                  {styleOpt.label}
                 </option>
               ))}
             </select>
           </div>
 
+          {/* AI Auto-Reply Toggle (Default ON) */}
           <button
             id="aiAutoReplyToggleBtn"
-            onClick={() => setIsAutoReplyEnabled((prev) => !prev)}
+            type="button"
+            onClick={handleToggleAutoReply}
             className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95 ${
               isAutoReplyEnabled
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
                 : 'bg-white/[0.04] border-white/10 text-slate-400 hover:text-slate-200'
             }`}
+            title="Toggle Stealth AI Auto-Reply"
           >
-            <Sparkles
-              className={`w-3.5 h-3.5 ${
-                isAutoReplyEnabled ? 'text-emerald-400 animate-spin' : 'text-slate-500'
+            <span
+              className={`w-2 h-2 rounded-full ${
+                isAutoReplyEnabled
+                  ? 'bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(52,211,153,0.9)]'
+                  : 'bg-slate-500'
               }`}
             />
-            <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-400 text-slate-950">
+            <span className="hidden xs:inline text-[11px]">Auto-Reply:</span>
+            <span
+              className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                isAutoReplyEnabled
+                  ? 'bg-emerald-400 text-slate-950'
+                  : 'bg-white/10 text-slate-400'
+              }`}
+            >
               {isAutoReplyEnabled ? 'ON' : 'OFF'}
             </span>
           </button>
         </div>
       </header>
 
-      {/* Persona Banner */}
-      {isAutoReplyEnabled && (
-        <div className="w-full bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-amber-300 text-xs font-medium">
-          <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span>
-            Gemini AI Auto-Reply active as <strong className="font-bold text-white">{selectedPersona}</strong> (gemini-1.5-flash)
-          </span>
+      {/* Toast Notice */}
+      {toastNotice && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 bg-amber-500 text-slate-950 px-4 py-2 rounded-xl text-xs font-bold shadow-xl flex items-center gap-2 animate-fade-in">
+          <span>{toastNotice}</span>
         </div>
       )}
 
-      {/* Messages */}
-      <div
-        id="messagesContainer"
-        className="flex-1 w-full max-w-3xl mx-auto overflow-y-auto px-4 py-6 flex flex-col gap-4"
-      >
-        <div className="w-full py-2 px-4 rounded-xl bg-[#0f121a]/70 border border-white/[0.06] text-center flex items-center justify-center gap-2 text-slate-400 text-xs shrink-0">
-          <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span>Private 1-on-1 PIN chat. Messages are saved securely in this room.</span>
+      {/* Voice / Mic notice */}
+      {micNotice && (
+        <div className="w-full bg-rose-500/20 border-b border-rose-500/30 px-4 py-1 text-center text-xs text-rose-300 font-mono">
+          {micNotice}
         </div>
+      )}
 
+      {/* 2. Messages Container with Dynamic Cyberpunk Anime Neon Eye Background */}
+      <div className="flex-1 relative w-full overflow-hidden flex flex-col">
+        {/* Customized Interactive Cyberpunk Anime Neon Eye Dynamic Background */}
+        <CyberpunkAnimeEye
+          isSeen={isEyeSeen}
+          messageStatusKey={eyeStatusKey}
+        />
+
+        {/* Messages List Area */}
+        <div
+          id="messagesScrollArea"
+          className="flex-1 overflow-y-auto px-3 sm:px-6 py-4 flex flex-col gap-3 max-w-3xl w-full mx-auto relative z-10"
+        >
+          {/* Empty Conversation Welcome */}
         {messages.length === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 my-auto">
-            <MessageSquare className="w-10 h-10 text-amber-400 mb-2" />
-            <h4 className="text-base font-bold text-white mb-1">Room #{pin} is Ready</h4>
-            <p className="text-xs text-slate-400 max-w-xs">Send a message to start conversation.</p>
+          <div className="w-full my-auto flex flex-col items-center justify-center text-center p-6 text-slate-400">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-3 shadow-inner">
+              <MessageSquare className="w-6 h-6" />
+            </div>
+            <h3 className="text-sm font-bold text-white mb-1">
+              End-to-End Encrypted Chat
+            </h3>
+            <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-3">
+              Send a message to start your private 1-on-1 conversation with @{targetUser.username}.
+            </p>
+            {targetUser.villageCity && (
+              <span className="text-[11px] font-mono text-amber-300/80 bg-[#161b26] px-2.5 py-1 rounded-lg border border-white/10">
+                Location: {targetUser.villageCity}
+              </span>
+            )}
           </div>
         )}
 
+        {/* Dynamic Messages List */}
         {messages.map((msg) => {
           const isOutgoing =
-            !msg.isAi &&
-            (msg.senderUid === (user.uid || 'current-user-id') ||
-              msg.senderName === (user.displayName || 'Mohit'));
+            (msg.senderUsername || '').trim().toLowerCase() ===
+            currentUser.username.trim().toLowerCase();
 
           return (
             <div
               key={msg.messageId}
-              className={`w-full flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}
+              id={`message-${msg.messageId}`}
+              className={`w-full flex flex-col group relative ${
+                isOutgoing ? 'items-end' : 'items-start'
+              }`}
             >
+              {/* Sender Name above incoming partner message */}
               {!isOutgoing && (
-                <span className="text-[11px] font-semibold text-amber-400/90 mb-1 ml-1 flex items-center gap-1">
+                <span className="text-[11px] font-semibold text-amber-400/90 mb-1 ml-1 flex items-center gap-1 select-none">
                   <UserIcon className="w-3 h-3" />
                   {msg.senderName}
                 </span>
               )}
 
-              <div
-                className={`max-w-[85%] sm:max-w-md px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-md ${
-                  isOutgoing
-                    ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-medium rounded-tr-none'
-                    : 'bg-[#161b26] border border-white/10 text-slate-100 rounded-tl-none'
-                }`}
-              >
-                <p className="break-words whitespace-pre-wrap">{msg.text}</p>
+              {/* Message Bubble + 3-Dot Action Trigger */}
+              <div className={`relative flex items-center gap-1.5 max-w-[85%] sm:max-w-md ${isOutgoing ? 'flex-row-reverse' : 'flex-row'}`}>
+                {/* Message Bubble */}
                 <div
-                  className={`text-[10px] font-mono mt-1 flex items-center justify-end gap-1 ${
-                    isOutgoing ? 'text-slate-900/70 font-semibold' : 'text-slate-400'
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setSelectedMessageForAction(msg);
+                  }}
+                  className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-lg transition-all ${
+                    isOutgoing
+                      ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-medium rounded-tr-none backdrop-blur-md shadow-amber-500/10'
+                      : 'bg-[#0f121a]/85 backdrop-blur-md border border-white/10 text-slate-100 rounded-tl-none shadow-black/40'
                   }`}
                 >
-                  <span>{formatTimestamp(msg.createdAt)}</span>
+                  <p className="break-words whitespace-pre-wrap">{msg.text}</p>
+
+                  {/* Footer: Timestamp & Ticks */}
+                  <div
+                    className={`text-[10px] font-mono mt-1.5 flex items-center justify-end gap-1.5 select-none ${
+                      isOutgoing ? 'text-slate-900/80 font-semibold' : 'text-slate-400'
+                    }`}
+                  >
+                    <span>{formatTimestamp(msg.createdAt)}</span>
+
+                    {/* Status Indicators for Outgoing (Right) Messages:
+                        - Single tick (✓): Sent
+                        - Double tick (✓✓) + small RED dot (🔴): Delivered (unread)
+                        - Double tick (✓✓) + small GREEN dot (🟢): Seen / Read by partner
+                    */}
+                    {isOutgoing && (
+                      <div className="flex items-center gap-1 ml-1 shrink-0">
+                        {msg.status === 'seen' ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-slate-950 font-bold"
+                            title="Seen / Read by partner"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5 text-slate-950" strokeWidth={2.6} />
+                            <span className="w-2 h-2 rounded-full bg-emerald-600 ring-1 ring-emerald-950/40 shadow-[0_0_5px_rgba(5,150,105,0.9)]" />
+                          </span>
+                        ) : msg.status === 'delivered' ? (
+                          <span
+                            className="inline-flex items-center gap-1 text-slate-900/90 font-medium"
+                            title="Delivered (Unread)"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5 text-slate-900" strokeWidth={2} />
+                            <span className="w-2 h-2 rounded-full bg-rose-600 animate-pulse ring-1 ring-rose-950/40 shadow-[0_0_5px_rgba(225,29,72,0.9)]" />
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center text-slate-900/80" title="Sent">
+                            <Check className="w-3.5 h-3.5" strokeWidth={2} />
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
+
+                {/* 3-Dot Message Action Trigger Button */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedMessageForAction(msg)}
+                  className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-opacity cursor-pointer shrink-0"
+                  title="Message options"
+                >
+                  <MoreVertical className="w-4 h-4" />
+                </button>
               </div>
             </div>
           );
         })}
 
-        {/* Real partner typing */}
+        {/* Partner Typing Bubble */}
         {partnerTyping.isTyping && (
-          <div className="w-full flex flex-col items-start transition-all">
+          <div
+            id="partnerTypingIndicator"
+            className="w-full flex flex-col items-start transition-all animate-fade-in"
+          >
             <span className="text-[11px] font-semibold text-amber-400/90 mb-1 ml-1 flex items-center gap-1">
               <UserIcon className="w-3 h-3" />
               {partnerTyping.name}
             </span>
-            <div className="bg-[#161b26] border border-white/10 text-slate-300 px-4 py-2.5 rounded-2xl rounded-tl-none flex items-center gap-2.5 text-xs shadow-md">
-              <span className="text-slate-400">{partnerTyping.name} is typing...</span>
+            <div className="bg-[#0f121a]/85 backdrop-blur-md border border-white/10 text-slate-300 px-4 py-2.5 rounded-2xl rounded-tl-none flex items-center gap-2.5 text-xs shadow-md">
+              <span className="text-slate-400 font-medium">
+                {partnerTyping.name} is typing
+              </span>
               <span className="inline-flex items-center gap-1">
                 <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
                 <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
@@ -754,29 +1020,35 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           </div>
         )}
 
-        {/* AI Typing Indicator */}
-        {aiIsTyping && (
-          <div className="w-full flex flex-col items-start transition-all">
-            <span className="text-[11px] font-semibold text-amber-400 mb-1 ml-1 flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-amber-400" />
-              {selectedPersona} (AI)
-            </span>
-            <div className="bg-[#161b26] border border-amber-500/30 text-amber-300 px-4 py-2 rounded-xl text-xs flex items-center gap-2">
-              <span>{selectedPersona} AI is typing...</span>
-              <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce" />
-            </div>
-          </div>
-        )}
-
         <div ref={messagesEndRef} className="h-2" />
       </div>
+    </div>
 
-      {/* Input Bar */}
+      {/* 3. Bottom Input Action Bar */}
       <div
         id="chatInputBar"
         className="w-full bg-[#0f121a]/95 backdrop-blur-xl border-t border-white/10 p-3 sm:p-4 z-20 shrink-0"
       >
-        <form onSubmit={handleSendMessage} className="max-w-3xl mx-auto flex items-center gap-2">
+        <form
+          onSubmit={handleSendMessage}
+          className="max-w-3xl mx-auto flex items-center gap-2"
+        >
+          {/* Voice Microphone */}
+          <button
+            id="chatVoiceBtn"
+            type="button"
+            onClick={handleMicClick}
+            className={`p-3 rounded-xl border transition-all cursor-pointer active:scale-95 shrink-0 ${
+              micActive
+                ? 'bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-500/30 animate-pulse'
+                : 'bg-[#161b26] border-white/10 text-slate-300 hover:text-amber-400 hover:border-amber-500/40'
+            }`}
+            title="Voice-to-Text Microphone"
+          >
+            <Mic className="w-5 h-5" />
+          </button>
+
+          {/* Text Input with Enter key submit */}
           <input
             id="chatMessageInput"
             type="text"
@@ -784,18 +1056,111 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             onChange={handleInputChange}
             placeholder="Type a message..."
             autoComplete="off"
-            className="flex-1 px-4 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/70 rounded-xl text-sm text-white focus:outline-none"
+            className="flex-1 px-4 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/70 focus:ring-2 focus:ring-amber-500/20 rounded-xl text-sm text-white placeholder:text-slate-500 focus:outline-none transition-all"
           />
+
+          {/* Send Button */}
           <button
             id="chatSendBtn"
             type="submit"
             disabled={!inputText.trim()}
-            className="p-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold cursor-pointer shrink-0"
+            className={`p-3 rounded-xl font-bold transition-all shadow-md active:scale-95 shrink-0 ${
+              inputText.trim()
+                ? 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20 cursor-pointer'
+                : 'bg-white/[0.05] text-slate-500 border border-white/[0.05] cursor-not-allowed opacity-50'
+            }`}
+            title="Send Message"
           >
             <Send className="w-5 h-5" />
           </button>
         </form>
       </div>
+
+      {/* 4. Message Action Modal (2-Minute Unsend & Permanent Delete) */}
+      {selectedMessageForAction && (
+        <div
+          id="messageActionBackdrop"
+          onClick={() => setSelectedMessageForAction(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm select-none"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm rounded-3xl bg-[#0f121a] border border-white/10 p-5 flex flex-col gap-4 shadow-2xl relative animate-fade-in"
+          >
+            {/* Header with snippet */}
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <span className="text-xs font-bold text-slate-300">Message Controls</span>
+              <button
+                type="button"
+                onClick={() => setSelectedMessageForAction(null)}
+                className="p-1 rounded-full text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3 rounded-xl bg-[#161b26] border border-white/[0.06] text-xs text-slate-300 max-h-24 overflow-y-auto whitespace-pre-wrap">
+              "{selectedMessageForAction.text}"
+            </div>
+
+            {/* Action Buttons */}
+            <div className="flex flex-col gap-2">
+              {/* UNSEND FOR EVERYONE (Strictly within 120s) */}
+              {(() => {
+                const isMine =
+                  selectedMessageForAction.senderUsername.toLowerCase() ===
+                  currentUser.username.toLowerCase();
+                const elapsedSec = Math.floor(
+                  (Date.now() - selectedMessageForAction.createdAt) / 1000
+                );
+                const remainingSec = 120 - elapsedSec;
+                const canUnsend = isMine && remainingSec > 0;
+
+                if (canUnsend) {
+                  return (
+                    <button
+                      id="unsendForEveryoneBtn"
+                      type="button"
+                      onClick={() => handleUnsendForEveryone(selectedMessageForAction)}
+                      className="w-full py-3 px-4 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-bold flex items-center justify-between transition-all cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2">
+                        <RotateCcw className="w-4 h-4 text-rose-400" />
+                        <span>Unsend for Everyone</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-rose-400 bg-rose-500/20 px-2 py-0.5 rounded-full">
+                        {Math.floor(remainingSec / 60)}m {remainingSec % 60}s left
+                      </span>
+                    </button>
+                  );
+                }
+                return null;
+              })()}
+
+              {/* DELETE PERMANENTLY (Always available) */}
+              <button
+                id="deletePermanentlyBtn"
+                type="button"
+                onClick={() => handleDeletePermanently(selectedMessageForAction)}
+                className="w-full py-3 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-200 text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4 text-slate-400" />
+                <span>Delete Permanently</span>
+              </button>
+
+              {/* COPY MESSAGE */}
+              <button
+                type="button"
+                onClick={() => handleCopyMessage(selectedMessageForAction.text)}
+                className="w-full py-2.5 px-4 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/[0.06] text-slate-400 hover:text-white text-xs font-medium flex items-center gap-2 transition-all cursor-pointer"
+              >
+                <Copy className="w-4 h-4" />
+                <span>Copy Text</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
