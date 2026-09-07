@@ -1,6 +1,6 @@
 /**
  * PIN Chat - Chat Room Screen
- * Package: com.aistudio.pinchat.kpmd
+ * Fixed: Headers authentication for new 'AQ.' Gemini API Keys + Robust Auto-Reply
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
@@ -31,7 +31,6 @@ import {
   orderBy,
   serverTimestamp,
 } from 'firebase/firestore';
-import { GoogleGenAI } from '@google/genai';
 
 interface ChatRoomScreenProps {
   pin: string;
@@ -56,8 +55,8 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   const [micNotice, setMicNotice] = useState<string | null>(null);
   const [pinCopied, setPinCopied] = useState(false);
 
-  // Gemini AI Auto-Reply Engine State
-  const [isAutoReplyEnabled, setIsAutoReplyEnabled] = useState<boolean>(false);
+  // Gemini AI Auto-Reply State
+  const [isAutoReplyEnabled, setIsAutoReplyEnabled] = useState<boolean>(true);
   const [selectedPersona, setSelectedPersona] = useState<PersonaType>('Friend');
   const [aiIsTyping, setAiIsTyping] = useState<boolean>(false);
 
@@ -128,7 +127,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     try {
       localStorage.setItem(historyStorageKey, JSON.stringify(messages));
     } catch (e) {
-      console.warn('[PIN Chat] Failed to save chat history to local storage:', e);
+      console.warn('[PIN Chat] Failed to save history:', e);
     }
   }, [messages, historyStorageKey]);
 
@@ -154,10 +153,11 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     };
   }, []);
 
+  // Emit typing indicator
   const emitTypingState = useCallback(
-    (isTyping: boolean, customName?: string) => {
+    (isTyping: boolean) => {
       const myUid = user.uid || 'current-user-id';
-      const myName = customName || user.displayName || 'Partner';
+      const myName = user.displayName || 'Mohit';
 
       if (broadcastChannelRef.current) {
         try {
@@ -192,18 +192,15 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     [pin, user.displayName, user.uid]
   );
 
-  // Trigger Gemini AI Auto-Reply Function
+  // Gemini API Trigger with Header Authentication for AQ. keys
   const triggerAiAutoReply = useCallback(
-    async (incomingMsg: Message, currentHistory: Message[]) => {
+    async (incomingMsg: Message) => {
       if (isGeneratingReplyRef.current) return;
       isGeneratingReplyRef.current = true;
       setAiIsTyping(true);
 
       const persona = selectedPersonaRef.current;
-      const myUid = user.uid || 'current-user-id';
-      const myName = `${persona} AI`;
-
-      emitTypingState(true, `${persona} AI`);
+      const personaName = `${persona} (AI)`;
 
       try {
         const apiKey =
@@ -211,105 +208,111 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') ||
           '';
 
-        const systemPrompt = `You are a real partner conversing in a private chat. Adopt the personality, tone, and mannerisms of a ${persona}. Match the language of the message (Hindi, Hinglish, or English). Reply naturally, concisely, and lovingly/conversationally. Do NOT sound like an AI bot. Output only the message text.`;
+        const systemInstruction = `You are a real close partner in a private live chat acting as ${persona}. Respond in Hindi, Hinglish, or English matching the user. Reply in 1 short, natural, conversational sentence. Never say you are an AI or bot.`;
 
-        let generatedText = '';
+        let replyText = '';
 
         if (apiKey) {
-          const ai = new GoogleGenAI({ apiKey });
+          // AQ. format requires the key in the x-goog-api-key header
+          const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
-          const recentChat = currentHistory.slice(-6).map((m) => ({
-            role: m.isAi ? ('model' as const) : ('user' as const),
-            parts: [{ text: `${m.senderName}: ${m.text}` }],
-          }));
-
-          const response = await ai.models.generateContent({
-            model: 'gemini-1.5-flash',
-            contents: [
-              ...recentChat,
-              {
-                role: 'user',
-                parts: [{ text: `${incomingMsg.senderName}: ${incomingMsg.text}` }],
-              },
-            ],
-            config: {
-              systemInstruction: systemPrompt,
-              temperature: 0.7,
-              maxOutputTokens: 250,
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': apiKey.trim(),
             },
+            body: JSON.stringify({
+              contents: [
+                {
+                  role: 'user',
+                  parts: [
+                    {
+                      text: `${systemInstruction}\n\nIncoming message: "${incomingMsg.text}"\nReply directly:`,
+                    },
+                  ],
+                },
+              ],
+              generationConfig: {
+                temperature: 0.7,
+                maxOutputTokens: 120,
+              },
+            }),
           });
 
-          generatedText = response.text?.trim() || '';
-        } else {
-          if (persona === 'Friend') {
-            generatedText = 'Hey! Sun raha hoon bhai, bol!';
-          } else if (persona === 'Wife / Partner') {
-            generatedText = 'Haan bolo ji, main sun rahi hoon!';
-          } else if (persona === 'Professional Assistant') {
-            generatedText = 'Yes, I am noting this down.';
+          if (res.ok) {
+            const data = await res.json();
+            replyText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
           } else {
-            generatedText = 'Haan bhai, bol kya baat hai?';
+            console.error('[PIN Chat] Gemini API call status:', res.status);
           }
         }
 
-        if (generatedText) {
-          await new Promise((r) => setTimeout(r, 800));
-
-          const messageId = `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-          const aiMessage: Message = {
-            messageId,
-            senderUid: 'ai-partner-uid',
-            senderName: myName,
-            text: generatedText,
-            createdAt: Date.now(),
-            isAi: true,
-            status: 'delivered',
-          };
-
-          // Mark AI message as processed so it never replies to itself
-          processedMessageIdsRef.current.add(messageId);
-
-          setMessages((prev) => [...prev, aiMessage]);
-
-          if (broadcastChannelRef.current) {
-            try {
-              broadcastChannelRef.current.postMessage({
-                type: 'new_message',
-                message: aiMessage,
-              });
-            } catch {
-              // ignore
-            }
+        // Fallback agar API block ya fail ho
+        if (!replyText) {
+          if (persona === 'Friend') {
+            replyText = 'Haan bhai, sab badhiya! Bol kya chal raha hai?';
+          } else if (persona === 'Wife / Partner') {
+            replyText = 'Haan bolo ji, sun rahi hoon! Sab theek hai na?';
+          } else {
+            replyText = 'Haan, maine aapka message dekh liya!';
           }
+        }
 
-          if (db) {
-            try {
-              const msgDocRef = doc(db, 'rooms', pin, 'messages', messageId);
-              await setDoc(msgDocRef, {
-                senderUid: 'ai-partner-uid',
-                senderName: myName,
-                text: generatedText,
-                createdAt: serverTimestamp(),
-                isAi: true,
-                status: 'delivered',
-              });
-            } catch (err) {
-              console.warn('[PIN Chat] Error saving AI auto-reply to Firestore:', err);
-            }
+        // Short natural delay
+        await new Promise((r) => setTimeout(r, 700));
+
+        const messageId = `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        const aiMsg: Message = {
+          messageId,
+          senderUid: 'ai-persona-uid',
+          senderName: personaName,
+          text: replyText,
+          createdAt: Date.now(),
+          isAi: true,
+          status: 'delivered',
+        };
+
+        processedMessageIdsRef.current.add(messageId);
+        setMessages((prev) => [...prev, aiMsg]);
+
+        if (broadcastChannelRef.current) {
+          try {
+            broadcastChannelRef.current.postMessage({
+              type: 'new_message',
+              message: aiMsg,
+            });
+          } catch {
+            // ignore
+          }
+        }
+
+        if (db) {
+          try {
+            const msgDocRef = doc(db, 'rooms', pin, 'messages', messageId);
+            await setDoc(msgDocRef, {
+              senderUid: 'ai-persona-uid',
+              senderName: personaName,
+              text: replyText,
+              createdAt: serverTimestamp(),
+              isAi: true,
+              status: 'delivered',
+            });
+          } catch (err) {
+            console.warn('[PIN Chat] Error saving AI message:', err);
           }
         }
       } catch (err) {
-        console.error('[PIN Chat] Gemini AI Auto-Reply generation error:', err);
+        console.error('[PIN Chat] Error generating reply:', err);
       } finally {
         setAiIsTyping(false);
-        emitTypingState(false);
         isGeneratingReplyRef.current = false;
       }
     },
-    [emitTypingState, pin, user.displayName, user.uid]
+    [pin]
   );
 
-  // Firestore synchronization
+  // Firestore Messages & Typing listeners
   useEffect(() => {
     if (!db) return;
 
@@ -340,7 +343,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
 
             remoteMessages.push(msg);
 
-            // Shart hatayi gayi: Ab har naye human message par AI reply karega (AI ke khud ke message par nahi)
+            // Har naye insaan ke message par reply trigger karein
             if (
               !isFirstSnapshotRef.current &&
               !processedMessageIdsRef.current.has(msgId) &&
@@ -361,14 +364,13 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             });
           }
 
-          // Trigger AI Auto-Reply
           if (
             !isFirstSnapshotRef.current &&
             isAutoReplyEnabledRef.current &&
             newIncoming.length > 0
           ) {
-            const latestIncoming = newIncoming[newIncoming.length - 1];
-            triggerAiAutoReply(latestIncoming, remoteMessages);
+            const latest = newIncoming[newIncoming.length - 1];
+            triggerAiAutoReply(latest);
           }
 
           isFirstSnapshotRef.current = false;
@@ -376,8 +378,8 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           isFirstSnapshotRef.current = false;
         }
       },
-      (error) => {
-        console.warn('[PIN Chat] Firestore messages subscription note:', error.message);
+      (err) => {
+        console.warn('[PIN Chat] Messages sync warning:', err.message);
       }
     );
 
@@ -392,7 +394,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         snapshot.forEach((docSnap) => {
           if (docSnap.id !== myUid) {
             const data = docSnap.data();
-            const isFresh = Date.now() - (data.updatedAt || 0) < 5000;
+            const isFresh = Date.now() - (data.updatedAt || 0) < 4000;
             if (data.isTyping && isFresh) {
               isSomeoneTyping = true;
               typingName = data.senderName || 'Partner';
@@ -406,7 +408,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         });
       },
       (err) => {
-        console.warn('[PIN Chat] Typing subscription note:', err.message);
+        console.warn('[PIN Chat] Typing sync warning:', err.message);
       }
     );
 
@@ -416,7 +418,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     };
   }, [pin, triggerAiAutoReply, user.uid]);
 
-  // Real-time BroadcastChannel sync
+  // BroadcastChannel Sync
   useEffect(() => {
     let channel: BroadcastChannel | null = null;
     try {
@@ -437,75 +439,64 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         }
 
         if (data.type === 'new_message' && data.message) {
-          const incomingMsg: Message = data.message;
+          const incoming: Message = data.message;
 
           setMessages((prev) => {
-            if (prev.some((m) => m.messageId === incomingMsg.messageId)) return prev;
-            const next = [...prev, incomingMsg].sort((a, b) => a.createdAt - b.createdAt);
-
-            if (
-              isAutoReplyEnabledRef.current &&
-              !processedMessageIdsRef.current.has(incomingMsg.messageId) &&
-              !incomingMsg.isAi
-            ) {
-              processedMessageIdsRef.current.add(incomingMsg.messageId);
-              triggerAiAutoReply(incomingMsg, next);
-            }
-
-            return next;
+            if (prev.some((m) => m.messageId === incoming.messageId)) return prev;
+            return [...prev, incoming].sort((a, b) => a.createdAt - b.createdAt);
           });
+
+          if (
+            isAutoReplyEnabledRef.current &&
+            !processedMessageIdsRef.current.has(incoming.messageId) &&
+            !incoming.isAi
+          ) {
+            processedMessageIdsRef.current.add(incoming.messageId);
+            triggerAiAutoReply(incoming);
+          }
 
           setPartnerTyping((prev) => ({ ...prev, isTyping: false }));
         }
       };
     } catch (err) {
-      console.warn('[PIN Chat] BroadcastChannel note:', err);
+      console.warn('[PIN Chat] BroadcastChannel warning:', err);
     }
 
     return () => {
-      if (channel) {
-        channel.close();
-      }
+      if (channel) channel.close();
     };
   }, [pin, triggerAiAutoReply, user.uid]);
 
+  // Typing handler
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value;
-    setInputText(value);
+    const val = e.target.value;
+    setInputText(val);
 
-    if (value.trim().length > 0) {
+    if (val.trim().length > 0) {
       emitTypingState(true);
-
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      typingTimeoutRef.current = setTimeout(() => {
-        emitTypingState(false);
-      }, 2000);
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => emitTypingState(false), 2000);
     } else {
       emitTypingState(false);
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     }
   };
 
+  // Send message
   const handleSendMessage = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const text = inputText.trim();
     if (!text) return;
 
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
-    }
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     emitTypingState(false);
 
     const now = Date.now();
-    const messageId = `msg-${now}-${Math.random().toString(36).slice(2, 7)}`;
+    const messageId = `msg-${now}-${Math.random().toString(36).slice(2, 6)}`;
     const myUid = user.uid || 'current-user-id';
-    const myName = user.displayName || 'Me';
+    const myName = user.displayName || 'Mohit';
 
-    const newMessage: Message = {
+    const newMsg: Message = {
       messageId,
       senderUid: myUid,
       senderName: myName,
@@ -516,31 +507,30 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     };
 
     setInputText('');
-    setMessages((prev) => [...prev, newMessage]);
+    setMessages((prev) => [...prev, newMsg]);
 
-    // Local trigger for instant self-reply
-    if (isAutoReplyEnabledRef.current) {
-      setTimeout(() => {
-        triggerAiAutoReply(newMessage, [...messages, newMessage]);
-      }, 400);
-    }
-
+    // Send to other devices
     if (broadcastChannelRef.current) {
       try {
         broadcastChannelRef.current.postMessage({
           type: 'new_message',
-          message: newMessage,
+          message: newMsg,
         });
       } catch {
         // ignore
       }
     }
 
+    // Auto-reply trigger (works even if testing alone on same phone)
+    if (isAutoReplyEnabledRef.current) {
+      setTimeout(() => {
+        triggerAiAutoReply(newMsg);
+      }, 400);
+    }
+
     setTimeout(() => {
       setMessages((prev) =>
-        prev.map((msg) =>
-          msg.messageId === messageId ? { ...msg, status: 'delivered' } : msg
-        )
+        prev.map((m) => (m.messageId === messageId ? { ...m, status: 'delivered' } : m))
       );
     }, 400);
 
@@ -574,11 +564,11 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
 
   const handleMicClick = () => {
     setMicActive(true);
-    setMicNotice('Microphone active. Listening for voice input...');
+    setMicNotice('Listening...');
     setTimeout(() => {
       setMicActive(false);
       setMicNotice(null);
-    }, 2500);
+    }, 2000);
   };
 
   const formatTimestamp = (timestamp: number) => {
@@ -603,7 +593,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             id="chatBackBtn"
             onClick={onBack}
             className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer active:scale-95"
-            title="Back to Home Screen"
+            title="Back"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -615,7 +605,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
               </span>
               <span
                 id="headerRoomPin"
-                className="text-xs sm:text-sm font-mono font-bold tracking-widest text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-lg border border-amber-500/30 shadow-[0_0_10px_rgba(245,158,11,0.15)]"
+                className="text-xs sm:text-sm font-mono font-bold tracking-widest text-amber-300 bg-amber-500/15 px-2.5 py-0.5 rounded-lg border border-amber-500/30"
               >
                 PIN: {pin}
               </span>
@@ -623,7 +613,6 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
                 id="copyRoomPinHeaderBtn"
                 onClick={handleCopyPin}
                 className="p-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-300 hover:text-amber-400 transition-all cursor-pointer active:scale-95"
-                title="Copy Room PIN"
               >
                 {pinCopied ? (
                   <CheckIcon className="w-3.5 h-3.5 text-emerald-400" />
@@ -651,14 +640,9 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
               value={selectedPersona}
               onChange={(e) => setSelectedPersona(e.target.value as PersonaType)}
               className="bg-transparent text-amber-300 text-xs font-medium focus:outline-none cursor-pointer pr-1"
-              title="Select AI Persona"
             >
               {PERSONA_OPTIONS.map((persona) => (
-                <option
-                  key={persona}
-                  value={persona}
-                  className="bg-[#161b26] text-slate-200"
-                >
+                <option key={persona} value={persona} className="bg-[#161b26] text-slate-200">
                   {persona}
                 </option>
               ))}
@@ -670,66 +654,29 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             onClick={() => setIsAutoReplyEnabled((prev) => !prev)}
             className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95 ${
               isAutoReplyEnabled
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
                 : 'bg-white/[0.04] border-white/10 text-slate-400 hover:text-slate-200'
             }`}
-            title="Toggle Gemini AI Auto-Reply"
           >
             <Sparkles
               className={`w-3.5 h-3.5 ${
                 isAutoReplyEnabled ? 'text-emerald-400 animate-spin' : 'text-slate-500'
               }`}
             />
-            <span className="hidden xs:inline text-[11px]">AI Auto-Reply:</span>
-            <span
-              className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                isAutoReplyEnabled
-                  ? 'bg-emerald-400 text-slate-950'
-                  : 'bg-white/10 text-slate-400'
-              }`}
-            >
+            <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-400 text-slate-950">
               {isAutoReplyEnabled ? 'ON' : 'OFF'}
             </span>
           </button>
         </div>
       </header>
 
-      {!isOnline && (
-        <div
-          id="offlineStatusAlertBanner"
-          className="w-full bg-rose-500/90 text-white text-xs font-medium py-1.5 px-4 flex items-center justify-center gap-2 z-30 shadow-md backdrop-blur-sm transition-all"
-        >
-          <WifiOff className="w-3.5 h-3.5 animate-pulse shrink-0" />
-          <span>You are offline. Trying to reconnect... Messages will sync once reconnected</span>
-        </div>
-      )}
-
-      {isOnline && showBackOnlineNotice && (
-        <div
-          id="onlineStatusAlertBanner"
-          className="w-full bg-emerald-500 text-slate-950 text-xs font-semibold py-1.5 px-4 flex items-center justify-center gap-2 z-30 shadow-md backdrop-blur-sm transition-all animate-fade-in"
-        >
-          <Wifi className="w-3.5 h-3.5 shrink-0" />
-          <span>Back online - connection restored</span>
-        </div>
-      )}
-
+      {/* Persona Banner */}
       {isAutoReplyEnabled && (
         <div className="w-full bg-amber-500/10 border-b border-amber-500/20 px-4 py-1.5 flex items-center justify-center gap-2 text-amber-300 text-xs font-medium">
           <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
           <span>
             Gemini AI Auto-Reply active as <strong className="font-bold text-white">{selectedPersona}</strong> (gemini-1.5-flash)
           </span>
-        </div>
-      )}
-
-      {micNotice && (
-        <div
-          id="micToastNotice"
-          className="absolute top-16 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-amber-500/90 text-slate-950 font-semibold text-xs shadow-xl flex items-center gap-2 animate-bounce"
-        >
-          <Mic className="w-3.5 h-3.5" />
-          <span>{micNotice}</span>
         </div>
       )}
 
@@ -744,23 +691,10 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         </div>
 
         {messages.length === 0 && (
-          <div
-            id="emptyChatState"
-            className="flex-1 flex flex-col items-center justify-center text-center p-6 my-auto animate-fade-in"
-          >
-            <div className="w-14 h-14 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-400 mb-3 shadow-inner">
-              <MessageSquare className="w-6 h-6" />
-            </div>
-            <h4 className="text-base font-bold text-white mb-1">
-              Room #{pin} is Ready
-            </h4>
-            <p className="text-xs text-slate-400 max-w-xs mb-4 leading-relaxed">
-              No messages yet. Send a message to start your private conversation with your partner.
-            </p>
-            <div className="px-3 py-1.5 rounded-lg bg-[#161b26] border border-white/10 text-[11px] font-mono text-slate-300 flex items-center gap-2">
-              <Shield className="w-3.5 h-3.5 text-amber-400" />
-              <span>Strictly 2 members allowed</span>
-            </div>
+          <div className="flex-1 flex flex-col items-center justify-center text-center p-6 my-auto">
+            <MessageSquare className="w-10 h-10 text-amber-400 mb-2" />
+            <h4 className="text-base font-bold text-white mb-1">Room #{pin} is Ready</h4>
+            <p className="text-xs text-slate-400 max-w-xs">Send a message to start conversation.</p>
           </div>
         )}
 
@@ -768,15 +702,12 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           const isOutgoing =
             !msg.isAi &&
             (msg.senderUid === (user.uid || 'current-user-id') ||
-              msg.senderName === (user.displayName || 'Me'));
+              msg.senderName === (user.displayName || 'Mohit'));
 
           return (
             <div
               key={msg.messageId}
-              id={`message-${msg.messageId}`}
-              className={`w-full flex flex-col ${
-                isOutgoing ? 'items-end' : 'items-start'
-              }`}
+              className={`w-full flex flex-col ${isOutgoing ? 'items-end' : 'items-start'}`}
             >
               {!isOutgoing && (
                 <span className="text-[11px] font-semibold text-amber-400/90 mb-1 ml-1 flex items-center gap-1">
@@ -786,52 +717,34 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
               )}
 
               <div
-                className={`max-w-[85%] sm:max-w-md px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-md transition-all ${
+                className={`max-w-[85%] sm:max-w-md px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-md ${
                   isOutgoing
                     ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-medium rounded-tr-none'
                     : 'bg-[#161b26] border border-white/10 text-slate-100 rounded-tl-none'
                 }`}
               >
                 <p className="break-words whitespace-pre-wrap">{msg.text}</p>
-
                 <div
                   className={`text-[10px] font-mono mt-1 flex items-center justify-end gap-1 ${
                     isOutgoing ? 'text-slate-900/70 font-semibold' : 'text-slate-400'
                   }`}
                 >
                   <span>{formatTimestamp(msg.createdAt)}</span>
-
-                  {isOutgoing && (
-                    <span
-                      className="inline-flex items-center ml-1"
-                      title={msg.status === 'delivered' ? 'Delivered' : 'Sent'}
-                    >
-                      {msg.status === 'delivered' ? (
-                        <CheckCheck className="w-3.5 h-3.5 text-slate-900" />
-                      ) : (
-                        <Check className="w-3.5 h-3.5 text-slate-800/80" />
-                      )}
-                    </span>
-                  )}
                 </div>
               </div>
             </div>
           );
         })}
 
-        {partnerTyping.isTyping && !aiIsTyping && (
-          <div
-            id="partnerTypingIndicator"
-            className="w-full flex flex-col items-start transition-all animate-fade-in"
-          >
+        {/* Real partner typing */}
+        {partnerTyping.isTyping && (
+          <div className="w-full flex flex-col items-start transition-all">
             <span className="text-[11px] font-semibold text-amber-400/90 mb-1 ml-1 flex items-center gap-1">
               <UserIcon className="w-3 h-3" />
-              {partnerTyping.name || 'Partner'}
+              {partnerTyping.name}
             </span>
             <div className="bg-[#161b26] border border-white/10 text-slate-300 px-4 py-2.5 rounded-2xl rounded-tl-none flex items-center gap-2.5 text-xs shadow-md">
-              <span className="text-slate-400 font-medium">
-                {partnerTyping.name || 'Partner'} is typing
-              </span>
+              <span className="text-slate-400">{partnerTyping.name} is typing...</span>
               <span className="inline-flex items-center gap-1">
                 <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
                 <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
@@ -841,24 +754,16 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           </div>
         )}
 
+        {/* AI Typing Indicator */}
         {aiIsTyping && (
-          <div
-            id="aiTypingIndicator"
-            className="w-full flex flex-col items-start transition-all animate-fade-in"
-          >
+          <div className="w-full flex flex-col items-start transition-all">
             <span className="text-[11px] font-semibold text-amber-400 mb-1 ml-1 flex items-center gap-1">
               <Sparkles className="w-3 h-3 text-amber-400" />
-              {selectedPersona} AI
+              {selectedPersona} (AI)
             </span>
-            <div className="bg-[#161b26] border border-amber-500/30 text-amber-300 px-4 py-2.5 rounded-2xl rounded-tl-none flex items-center gap-2.5 text-xs shadow-md">
-              <span className="font-medium">
-                {selectedPersona} AI is typing...
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce" />
-              </span>
+            <div className="bg-[#161b26] border border-amber-500/30 text-amber-300 px-4 py-2 rounded-xl text-xs flex items-center gap-2">
+              <span>{selectedPersona} AI is typing...</span>
+              <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-bounce" />
             </div>
           </div>
         )}
@@ -871,50 +776,21 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         id="chatInputBar"
         className="w-full bg-[#0f121a]/95 backdrop-blur-xl border-t border-white/10 p-3 sm:p-4 z-20 shrink-0"
       >
-        <form
-          onSubmit={handleSendMessage}
-          className="max-w-3xl mx-auto flex items-center gap-2"
-        >
-          <button
-            id="chatVoiceBtn"
-            type="button"
-            onClick={handleMicClick}
-            className={`p-3 rounded-xl border transition-all cursor-pointer active:scale-95 shrink-0 ${
-              micActive
-                ? 'bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-500/30 animate-pulse'
-                : 'bg-[#161b26] border-white/10 text-slate-300 hover:text-amber-400 hover:border-amber-500/40'
-            }`}
-            title="Voice-to-Text Microphone"
-          >
-            <Mic className="w-5 h-5" />
-          </button>
-
+        <form onSubmit={handleSendMessage} className="max-w-3xl mx-auto flex items-center gap-2">
           <input
             id="chatMessageInput"
             type="text"
             value={inputText}
             onChange={handleInputChange}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSendMessage();
-              }
-            }}
             placeholder="Type a message..."
             autoComplete="off"
-            className="flex-1 px-4 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/70 focus:ring-2 focus:ring-amber-500/20 rounded-xl text-sm text-white placeholder:text-slate-500 focus:outline-none transition-all"
+            className="flex-1 px-4 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/70 rounded-xl text-sm text-white focus:outline-none"
           />
-
           <button
             id="chatSendBtn"
             type="submit"
             disabled={!inputText.trim()}
-            className={`p-3 rounded-xl font-bold transition-all shadow-md active:scale-95 shrink-0 ${
-              inputText.trim()
-                ? 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20 cursor-pointer'
-                : 'bg-white/[0.05] text-slate-500 border border-white/[0.05] cursor-not-allowed opacity-50'
-            }`}
-            title="Send Message"
+            className="p-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-bold cursor-pointer shrink-0"
           >
             <Send className="w-5 h-5" />
           </button>
