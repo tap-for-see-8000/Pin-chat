@@ -10,7 +10,7 @@
  * 5. Gemini AI Auto-Reply with Persona Engine:
  *    - AI Auto-Reply Toggle: [ON / OFF] (default: OFF)
  *    - Persona Selector Dropdown: "Friend", "Wife / Partner", "Professional Assistant", "Casual Buddy" (default: "Friend")
- *    - Uses @google/genai with gemini-2.5-flash
+ *    - Uses @google/genai with gemini-1.5-flash
  *    - Shows "[Selected Persona] AI is typing..."
  *    - Feeds recent chat history and incoming message with exact prompt
  *    - Sends generated message to Firestore as current user's message
