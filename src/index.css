@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
 
 :root {
   --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -140,3 +141,63 @@ body {
 .animate-ripple-pulse {
   animation: ripple-ring 1s cubic-bezier(0.1, 0.8, 0.2, 1) forwards;
 }
+
+/* Cyberpunk Leaflet Custom Styling */
+.leaflet-container {
+  background-color: #07090e !important;
+  font-family: inherit;
+}
+
+.leaflet-tile {
+  filter: brightness(0.85) contrast(1.15) saturate(1.1);
+}
+
+.leaflet-bar {
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  border-radius: 8px !important;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-bar a {
+  background-color: #0f121a !important;
+  color: #f1f5f9 !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: #1e2535 !important;
+  color: #f59e0b !important;
+}
+
+.leaflet-control-attribution {
+  background: rgba(7, 9, 14, 0.8) !important;
+  color: #64748b !important;
+  font-size: 9px !important;
+}
+
+.leaflet-control-attribution a {
+  color: #94a3b8 !important;
+}
+
+/* Custom Marker Glow Animation */
+@keyframes radar-pulse-cyan {
+  0% { transform: scale(0.9); opacity: 0.9; }
+  50% { transform: scale(1.6); opacity: 0.15; }
+  100% { transform: scale(0.9); opacity: 0.9; }
+}
+
+@keyframes radar-pulse-magenta {
+  0% { transform: scale(0.9); opacity: 0.9; }
+  50% { transform: scale(1.6); opacity: 0.15; }
+  100% { transform: scale(0.9); opacity: 0.9; }
+}
+
+.marker-pulse-cyan {
+  animation: radar-pulse-cyan 2s infinite ease-out;
+}
+
+.marker-pulse-magenta {
+  animation: radar-pulse-magenta 2s infinite ease-out;
+}
+

@@ -30,7 +30,7 @@ import {
   onSnapshot,
   serverTimestamp,
 } from 'firebase/firestore';
-import { UserRecord, PublicUserProfile, ChatConversation, UserPresence } from './types';
+import { UserRecord, PublicUserProfile, ChatConversation, UserPresence, LocationSession, LocationUserCoordinate } from './types';
 
 const AUTH_STORAGE_KEY = 'pinchat_auth_user';
 const LOCAL_USERS_CACHE_KEY = 'pinchat_registered_users_cache';
@@ -98,6 +98,11 @@ export function getChatId(usernameA: string, usernameB: string): string {
   return `chat_${sorted[0]}_${sorted[1]}`;
 }
 
+export const DEFAULT_AVATARS = {
+  male: 'https://api.dicebear.com/7.x/bottts-neutral/svg?seed=Felix',
+  female: 'https://api.dicebear.com/7.x/bottts-neutral/svg?seed=Aneka',
+};
+
 /**
  * Registers a new user in Firestore 'users/{username}' and localStorage.
  */
@@ -105,7 +110,8 @@ export async function registerNewUser(data: {
   fullName: string;
   mobileNumber: string;
   villageCity: string;
-  pinCode: string;
+  gender?: 'male' | 'female';
+  avatarUrl?: string;
 }): Promise<{
   success: boolean;
   user?: UserRecord;
@@ -114,7 +120,8 @@ export async function registerNewUser(data: {
   const cleanName = data.fullName.trim();
   const cleanMobile = data.mobileNumber.replace(/\D/g, '');
   const cleanVillage = data.villageCity.trim();
-  const cleanPin = data.pinCode.replace(/\D/g, '');
+  const gender: 'male' | 'female' = data.gender === 'female' ? 'female' : 'male';
+  const avatarUrl = data.avatarUrl?.trim() || DEFAULT_AVATARS[gender];
 
   if (!cleanName || cleanName.length < 2) {
     return { success: false, error: 'Please enter a valid full name.' };
@@ -124,9 +131,6 @@ export async function registerNewUser(data: {
   }
   if (!cleanVillage) {
     return { success: false, error: 'Please enter your village or city (गांव / शहर).' };
-  }
-  if (cleanPin.length !== 6) {
-    return { success: false, error: 'Please enter a valid 6-digit Pincode (पिन कोड).' };
   }
 
   const { username, password } = generateCredentials(cleanName, cleanMobile);
@@ -138,7 +142,8 @@ export async function registerNewUser(data: {
     fullName: cleanName,
     mobileNumber: cleanMobile,
     villageCity: cleanVillage,
-    pinCode: cleanPin,
+    gender,
+    avatarUrl,
     createdAt: now,
     updatedAt: now,
   };
@@ -260,7 +265,8 @@ export async function searchUserByUsername(
           username: data.username,
           fullName: data.fullName || data.username,
           villageCity: data.villageCity,
-          pinCode: data.pinCode,
+          gender: data.gender || 'male',
+          avatarUrl: data.avatarUrl || (data.gender === 'female' ? DEFAULT_AVATARS.female : DEFAULT_AVATARS.male),
         };
         return { exists: true, user: publicProfile };
       }
@@ -280,7 +286,8 @@ export async function searchUserByUsername(
         username: cachedUser.username,
         fullName: cachedUser.fullName || cachedUser.username,
         villageCity: cachedUser.villageCity,
-        pinCode: cachedUser.pinCode,
+        gender: cachedUser.gender || 'male',
+        avatarUrl: cachedUser.avatarUrl || (cachedUser.gender === 'female' ? DEFAULT_AVATARS.female : DEFAULT_AVATARS.male),
       },
     };
   }
@@ -574,3 +581,212 @@ export function saveConversationItem(
     // ignore
   }
 }
+
+/**
+ * MUTUAL TWO-WAY LIVE LOCATION SHARING HELPERS
+ */
+
+export function calculateDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): { meters: number; formatted: string } {
+  const R = 6371e3; // Earth's radius in meters
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
+  const deltaLambda = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(deltaPhi / 2) * Math.sin(deltaPhi / 2) +
+    Math.cos(phi1) * Math.cos(phi2) * Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const meters = Math.round(R * c);
+
+  let formatted = '';
+  if (meters < 1000) {
+    formatted = `${meters}m`;
+  } else {
+    formatted = `${(meters / 1000).toFixed(2)}km`;
+  }
+
+  return { meters, formatted };
+}
+
+export async function requestLocationSharing(
+  chatId: string,
+  requestedByUsername: string
+): Promise<boolean> {
+  const reqBy = requestedByUsername.toLowerCase();
+  const sessionData: LocationSession = {
+    status: 'requested',
+    requestedBy: reqBy,
+    activeUsers: {},
+  };
+
+  if (db) {
+    try {
+      const chatRef = doc(db, 'chats', chatId);
+      await setDoc(chatRef, { locationSession: sessionData }, { merge: true });
+      return true;
+    } catch (err) {
+      console.warn('[UserService] requestLocationSharing failed:', err);
+    }
+  }
+  return true;
+}
+
+export async function respondLocationSharing(
+  chatId: string,
+  accept: boolean,
+  responderUsername: string,
+  initialCoords?: { lat: number; lng: number }
+): Promise<boolean> {
+  const responder = responderUsername.toLowerCase();
+  if (!accept) {
+    return stopLocationSharing(chatId);
+  }
+
+  if (db) {
+    try {
+      const chatRef = doc(db, 'chats', chatId);
+      const updatePayload: Record<string, any> = {
+        'locationSession.status': 'active',
+      };
+      if (initialCoords) {
+        updatePayload[`locationSession.activeUsers.${responder}`] = {
+          lat: initialCoords.lat,
+          lng: initialCoords.lng,
+          updatedAt: Date.now(),
+        };
+      }
+      await updateDoc(chatRef, updatePayload);
+      return true;
+    } catch (err) {
+      console.warn('[UserService] respondLocationSharing failed:', err);
+    }
+  }
+  return true;
+}
+
+export async function updateUserLiveCoordinates(
+  chatId: string,
+  username: string,
+  lat: number,
+  lng: number
+): Promise<void> {
+  if (db) {
+    try {
+      const chatRef = doc(db, 'chats', chatId);
+      const userKey = username.toLowerCase();
+      await updateDoc(chatRef, {
+        [`locationSession.activeUsers.${userKey}`]: {
+          lat,
+          lng,
+          updatedAt: Date.now(),
+        },
+      });
+    } catch (err) {
+      // ignore
+    }
+  }
+}
+
+export async function stopLocationSharing(chatId: string): Promise<boolean> {
+  if (db) {
+    try {
+      const chatRef = doc(db, 'chats', chatId);
+      await updateDoc(chatRef, {
+        'locationSession.status': 'idle',
+        'locationSession.requestedBy': '',
+        'locationSession.activeUsers': {},
+      });
+      return true;
+    } catch (err) {
+      console.warn('[UserService] stopLocationSharing failed:', err);
+    }
+  }
+  return true;
+}
+
+/**
+ * Privacy helper: Masks phone number revealing only the final single digit.
+ * Takes the 10-digit phone number.
+ * Replaces the first 9 digits with asterisks and reveals ONLY the final single digit.
+ * Format example: "*********4"
+ */
+export function maskPhone(phone?: string): string {
+  if (!phone) return '*********0';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 0) return '*********0';
+  const lastDigit = digits.slice(-1);
+  return `*********${lastDigit}`;
+}
+
+/**
+ * Fetches all registered users from Firestore 'users' collection,
+ * excluding current logged-in user.
+ * Ordered alphabetically by fullName.
+ */
+export async function getAllRegisteredUsers(
+  currentUsername: string
+): Promise<PublicUserProfile[]> {
+  const myKey = currentUsername.trim().toLowerCase();
+  const usersMap = new Map<string, PublicUserProfile>();
+
+  // 1. Fetch from Firestore 'users' collection
+  if (db) {
+    try {
+      const usersRef = collection(db, 'users');
+      const snap = await getDocs(usersRef);
+      snap.forEach((docSnap) => {
+        const data = docSnap.data() as UserRecord & { phone?: string };
+        const u = (data.username || docSnap.id).toLowerCase().trim();
+        if (u && u !== myKey) {
+          usersMap.set(u, {
+            username: u,
+            fullName: data.fullName || u,
+            phone: data.mobileNumber || data.phone || '',
+            mobileNumber: data.mobileNumber || data.phone || '',
+            villageCity: data.villageCity,
+            gender: data.gender || 'male',
+            avatarUrl:
+              data.avatarUrl ||
+              (data.gender === 'female' ? DEFAULT_AVATARS.female : DEFAULT_AVATARS.male),
+            createdAt: data.createdAt,
+          });
+        }
+      });
+    } catch (err) {
+      console.warn('[UserService] getAllRegisteredUsers firestore note:', err);
+    }
+  }
+
+  // 2. Fallback / merge from local registered users cache
+  const cache = getLocalUsersCache();
+  Object.values(cache).forEach((cached) => {
+    const u = cached.username.toLowerCase().trim();
+    if (u && u !== myKey && !usersMap.has(u)) {
+      usersMap.set(u, {
+        username: u,
+        fullName: cached.fullName || u,
+        phone: cached.mobileNumber || (cached as any).phone || '',
+        mobileNumber: cached.mobileNumber || (cached as any).phone || '',
+        villageCity: cached.villageCity,
+        gender: cached.gender || 'male',
+        avatarUrl:
+          cached.avatarUrl ||
+          (cached.gender === 'female' ? DEFAULT_AVATARS.female : DEFAULT_AVATARS.male),
+        createdAt: cached.createdAt,
+      });
+    }
+  });
+
+  // Order alphabetically by fullName
+  return Array.from(usersMap.values()).sort((a, b) =>
+    a.fullName.localeCompare(b.fullName, undefined, { sensitivity: 'base' })
+  );
+}
+
+

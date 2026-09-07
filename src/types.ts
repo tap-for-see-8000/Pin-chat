@@ -9,7 +9,8 @@ export interface UserRecord {
   fullName: string; // e.g. "Mohit Yadav"
   mobileNumber: string; // 10 digits
   villageCity: string;  // गांव / शहर
-  pinCode: string;      // 6 digits
+  gender: 'male' | 'female';
+  avatarUrl: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -20,13 +21,17 @@ export interface UserPresence {
   lastSeen: number;
 }
 
-// Public user profile when searched (never reveals password or private mobile)
+// Public user profile when searched (never reveals password or full private mobile)
 export interface PublicUserProfile {
   username: string;
   fullName: string;
+  phone?: string;
+  mobileNumber?: string;
   villageCity?: string;
-  pinCode?: string;
+  gender?: 'male' | 'female';
+  avatarUrl?: string;
   presence?: UserPresence;
+  createdAt?: number;
 }
 
 export type AutoReplyStyle = 'friend' | 'casual' | 'supportive' | 'professional';
@@ -53,11 +58,26 @@ export interface ChatMessage {
   deletedForEveryone?: boolean;
 }
 
+export interface LocationUserCoordinate {
+  lat: number;
+  lng: number;
+  updatedAt: number;
+}
+
+export interface LocationSession {
+  status: 'idle' | 'requested' | 'active';
+  requestedBy: string;
+  activeUsers: {
+    [username: string]: LocationUserCoordinate;
+  };
+}
+
 // Room / ChatSession with Auto-Reply settings & memory summary
 export interface ChatSession {
   chatId: string;
   participants: string[];
   participantNames?: { [username: string]: string };
+  locationSession?: LocationSession;
   autoReplySettings?: {
     [username: string]: AutoReplySettingItem;
   };

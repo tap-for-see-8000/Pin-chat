@@ -45,6 +45,8 @@ import {
   Copy,
   X,
   Clock,
+  Radio,
+  Compass,
 } from 'lucide-react';
 import {
   UserRecord,
@@ -52,6 +54,7 @@ import {
   ChatMessage,
   PersonaType,
   UserPresence,
+  LocationSession,
 } from '../types';
 import {
   saveConversationItem,
@@ -60,7 +63,11 @@ import {
   formatLastSeen,
   unsendFirestoreMessage,
   deleteFirestoreMessage,
+  requestLocationSharing,
+  respondLocationSharing,
+  stopLocationSharing,
 } from '../userService';
+import { LiveLocationRadar } from './LiveLocationRadar';
 import { db } from '../firebase';
 import {
   collection,
@@ -104,6 +111,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   const [inputText, setInputText] = useState('');
   const [micActive, setMicActive] = useState(false);
   const [micNotice, setMicNotice] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Stealth Gemini AI Auto-Reply State (Default ON, with selected Conversation Style)
   const initialSettings = getChatAutoReplySettings(chatId, currentUser.username);
@@ -238,12 +246,53 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     };
   }, [currentUser.username]);
 
+  // 2b. Firestore Real-Time Listener for Mutual Location Session
+  const [locationSession, setLocationSession] = useState<LocationSession | undefined>(undefined);
+
+  useEffect(() => {
+    if (!db) return;
+    try {
+      const chatRef = doc(db, 'chats', chatId);
+      const unsub = onSnapshot(chatRef, (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data?.locationSession) {
+            setLocationSession(data.locationSession as LocationSession);
+          } else {
+            setLocationSession({ status: 'idle', requestedBy: '', activeUsers: {} });
+          }
+        }
+      });
+      return () => unsub();
+    } catch (err) {
+      console.warn('[ChatRoom] location session snapshot note:', err);
+    }
+  }, [chatId]);
+
   // Helper toast notifier
   const showToast = (msg: string) => {
     setToastNotice(msg);
     setTimeout(() => {
       setToastNotice(null);
     }, 2500);
+  };
+
+  const handleToggleLocationRadar = () => {
+    if (!locationSession || locationSession.status === 'idle') {
+      requestLocationSharing(chatId, currentUser.username);
+      showToast('Location radar requested');
+    } else if (locationSession.status === 'requested') {
+      if (locationSession.requestedBy === currentUser.username.toLowerCase()) {
+        stopLocationSharing(chatId);
+        showToast('Location request cancelled');
+      } else {
+        respondLocationSharing(chatId, true, currentUser.username);
+        showToast('Location radar accepted');
+      }
+    } else if (locationSession.status === 'active') {
+      stopLocationSharing(chatId);
+      showToast('Live location radar stopped');
+    }
   };
 
   // Header Auto-Reply Toggle & Style change handlers
@@ -555,6 +604,9 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     };
 
     setInputText('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
     emitTypingState(false);
 
     // Optimistic UI update
@@ -649,10 +701,20 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     setSelectedMessageForAction(null);
   };
 
-  // Input change with typing emitter
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInputText(e.target.value);
+  // Input change with typing emitter & multiline auto-expand
+  const handleInputChange = (
+    e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>
+  ) => {
+    const val = e.target.value;
+    setInputText(val);
     emitTypingState(true);
+
+    // Auto-adjust textarea height up to 140px
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      const scrollH = textareaRef.current.scrollHeight;
+      textareaRef.current.style.height = `${Math.min(scrollH, 140)}px`;
+    }
 
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     typingTimeoutRef.current = setTimeout(() => {
@@ -758,8 +820,39 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           </button>
 
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-amber-500/30 to-amber-700/30 border border-amber-500/40 flex items-center justify-center text-amber-300 font-bold text-sm shrink-0">
-              {targetUser.fullName.charAt(0).toUpperCase()}
+            {/* Circular Partner Avatar with Real-time Presence / Typing Badge */}
+            <div className="relative shrink-0">
+              <div className="w-10 h-10 rounded-full p-0.5 bg-gradient-to-tr from-amber-500/60 to-amber-600/60 border border-amber-500/40 overflow-hidden flex items-center justify-center bg-[#161b26] shadow-md">
+                {targetUser.avatarUrl ? (
+                  <img
+                    src={targetUser.avatarUrl}
+                    alt={targetUser.fullName}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="text-amber-300 font-bold text-sm">
+                    {targetUser.fullName.charAt(0).toUpperCase()}
+                  </span>
+                )}
+              </div>
+              {/* Presence / Typing Indicator Dot */}
+              <span
+                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#0f121a] ${
+                  partnerTyping.isTyping
+                    ? 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)] animate-ping'
+                    : partnerPresence.isOnline
+                    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse'
+                    : 'bg-slate-500'
+                }`}
+                title={
+                  partnerTyping.isTyping
+                    ? 'Typing...'
+                    : partnerPresence.isOnline
+                    ? 'Online'
+                    : 'Offline'
+                }
+              />
             </div>
 
             <div>
@@ -768,17 +861,10 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
                   {targetUser.fullName}
                 </span>
 
-                {/* Pulsating green dot if Online */}
-                {partnerPresence.isOnline ? (
-                  <span
-                    className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.9)] shrink-0"
-                    title="Online"
-                  />
-                ) : (
-                  <span
-                    className="w-2 h-2 rounded-full bg-slate-500 shrink-0"
-                    title="Offline"
-                  />
+                {partnerTyping.isTyping && (
+                  <span className="text-[10px] font-mono text-amber-300 font-medium px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/30 animate-pulse">
+                    typing...
+                  </span>
                 )}
               </div>
 
@@ -786,7 +872,11 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
               <div className="flex items-center gap-1.5 text-[11px] font-mono leading-tight">
                 <span className="text-amber-400/90">@{targetUser.username}</span>
                 <span className="text-slate-500">•</span>
-                {partnerPresence.isOnline ? (
+                {partnerTyping.isTyping ? (
+                  <span className="text-amber-300 font-semibold animate-pulse">
+                    typing...
+                  </span>
+                ) : partnerPresence.isOnline ? (
                   <span className="text-emerald-400 font-semibold">
                     Online
                   </span>
@@ -854,8 +944,44 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
               {isAutoReplyEnabled ? 'ON' : 'OFF'}
             </span>
           </button>
+
+          {/* Location Radar Toggle Button in Header */}
+          <button
+            id="locationRadarToggleBtn"
+            type="button"
+            onClick={handleToggleLocationRadar}
+            className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95 ${
+              locationSession?.status === 'active'
+                ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.3)]'
+                : locationSession?.status === 'requested'
+                ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 animate-pulse'
+                : 'bg-white/[0.04] border-white/10 text-slate-400 hover:text-cyan-300 hover:border-cyan-500/30'
+            }`}
+            title="Mutual Two-Way Live Location Radar"
+          >
+            <Radio
+              className={`w-3.5 h-3.5 text-cyan-400 ${
+                locationSession?.status === 'active' ? 'animate-spin' : ''
+              }`}
+              style={locationSession?.status === 'active' ? { animationDuration: '4s' } : undefined}
+            />
+            <span className="text-[11px] font-semibold whitespace-nowrap">Live Radar</span>
+            {locationSession?.status === 'active' ? (
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
+            ) : locationSession?.status === 'requested' ? (
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            ) : null}
+          </button>
         </div>
       </header>
+
+      {/* Mutual Two-Way Live Location Radar & Permission Banners */}
+      <LiveLocationRadar
+        chatId={chatId}
+        currentUser={currentUser}
+        partnerUser={targetUser}
+        locationSession={locationSession}
+      />
 
       {/* Toast Notice */}
       {toastNotice && (
@@ -1030,15 +1156,15 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         className="w-full bg-[#0f121a]/95 backdrop-blur-xl border-t border-white/10 p-3 sm:p-4 z-20 shrink-0"
       >
         <form
-          onSubmit={handleSendMessage}
-          className="max-w-3xl mx-auto flex items-center gap-2"
+          onSubmit={(e) => e.preventDefault()}
+          className="max-w-3xl mx-auto flex items-end gap-2"
         >
           {/* Voice Microphone */}
           <button
             id="chatVoiceBtn"
             type="button"
             onClick={handleMicClick}
-            className={`p-3 rounded-xl border transition-all cursor-pointer active:scale-95 shrink-0 ${
+            className={`p-3 rounded-xl border transition-all cursor-pointer active:scale-95 shrink-0 mb-0.5 ${
               micActive
                 ? 'bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-500/30 animate-pulse'
                 : 'bg-[#161b26] border-white/10 text-slate-300 hover:text-amber-400 hover:border-amber-500/40'
@@ -1048,23 +1174,52 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             <Mic className="w-5 h-5" />
           </button>
 
-          {/* Text Input with Enter key submit */}
-          <input
+          {/* Location Radar Toggle Button in Input Bar */}
+          <button
+            id="chatInputRadarBtn"
+            type="button"
+            onClick={handleToggleLocationRadar}
+            className={`p-3 rounded-xl border transition-all cursor-pointer active:scale-95 shrink-0 mb-0.5 ${
+              locationSession?.status === 'active'
+                ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 shadow-md shadow-cyan-500/20'
+                : locationSession?.status === 'requested'
+                ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 animate-pulse'
+                : 'bg-[#161b26] border-white/10 text-slate-400 hover:text-cyan-400 hover:border-cyan-500/40'
+            }`}
+            title={
+              locationSession?.status === 'active'
+                ? 'Location Radar Active (Tap to Stop)'
+                : locationSession?.status === 'requested'
+                ? 'Location Radar Requested'
+                : 'Share Mutual Live Location Radar'
+            }
+          >
+            <Radio
+              className={`w-5 h-5 ${
+                locationSession?.status === 'active' ? 'text-cyan-400 animate-spin' : ''
+              }`}
+              style={locationSession?.status === 'active' ? { animationDuration: '4s' } : undefined}
+            />
+          </button>
+
+          {/* Multiline Textarea (Enter creates newline, message never sends on Enter) */}
+          <textarea
             id="chatMessageInput"
-            type="text"
+            ref={textareaRef}
+            rows={1}
             value={inputText}
             onChange={handleInputChange}
             placeholder="Type a message..."
-            autoComplete="off"
-            className="flex-1 px-4 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/70 focus:ring-2 focus:ring-amber-500/20 rounded-xl text-sm text-white placeholder:text-slate-500 focus:outline-none transition-all"
+            className="flex-1 max-h-36 min-h-[44px] px-4 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/70 focus:ring-2 focus:ring-amber-500/20 rounded-xl text-sm text-white placeholder:text-slate-500 focus:outline-none transition-all resize-none leading-relaxed overflow-y-auto"
           />
 
-          {/* Send Button */}
+          {/* Send Button: Dedicated tap/click to send */}
           <button
             id="chatSendBtn"
-            type="submit"
+            type="button"
+            onClick={() => handleSendMessage()}
             disabled={!inputText.trim()}
-            className={`p-3 rounded-xl font-bold transition-all shadow-md active:scale-95 shrink-0 ${
+            className={`p-3 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl font-bold transition-all shadow-md active:scale-95 shrink-0 mb-0.5 ${
               inputText.trim()
                 ? 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20 cursor-pointer'
                 : 'bg-white/[0.05] text-slate-500 border border-white/[0.05] cursor-not-allowed opacity-50'

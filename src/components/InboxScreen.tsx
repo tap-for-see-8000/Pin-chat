@@ -33,6 +33,8 @@ import {
   ChevronRight,
   X,
   Lock,
+  Users,
+  RefreshCw,
 } from 'lucide-react';
 import { UserRecord, PublicUserProfile, ChatConversation } from '../types';
 import {
@@ -42,6 +44,8 @@ import {
   getChatId,
   clearCurrentSession,
   subscribeToUserPresence,
+  maskPhone,
+  getAllRegisteredUsers,
 } from '../userService';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
@@ -73,6 +77,46 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
     targetUser: PublicUserProfile;
     chatId: string;
   } | null>(null);
+
+  // Active View Tab: 'messages' vs 'directory'
+  const [activeTab, setActiveTab] = useState<'messages' | 'directory'>('messages');
+
+  // Registered Users Directory State
+  const [directoryUsers, setDirectoryUsers] = useState<PublicUserProfile[]>([]);
+  const [isLoadingDirectory, setIsLoadingDirectory] = useState(false);
+  const [directoryLoaded, setDirectoryLoaded] = useState(false);
+
+  // Fetch all registered users from Firestore 'users'
+  const fetchDirectoryUsers = async () => {
+    setIsLoadingDirectory(true);
+    try {
+      const users = await getAllRegisteredUsers(currentUser.username);
+      setDirectoryUsers(users);
+      setDirectoryLoaded(true);
+    } catch (err) {
+      console.warn('[InboxScreen] Failed to load directory users:', err);
+    } finally {
+      setIsLoadingDirectory(false);
+    }
+  };
+
+  // Pre-fetch directory users once on mount or when switching tabs
+  useEffect(() => {
+    if (activeTab === 'directory' && !directoryLoaded) {
+      fetchDirectoryUsers();
+    }
+  }, [activeTab, directoryLoaded]);
+
+  // Real-time search filter for Directory
+  const filteredDirectoryUsers = directoryUsers.filter((u) => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      u.fullName.toLowerCase().includes(q) ||
+      u.username.toLowerCase().includes(q) ||
+      (u.villageCity && u.villageCity.toLowerCase().includes(q))
+    );
+  });
 
   // Sync conversations from Firestore 'chats' collection
   useEffect(() => {
@@ -256,8 +300,19 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
         {/* User Status Card */}
         <div className="w-full p-4 rounded-2xl bg-[#0f121a]/90 border border-white/10 flex items-center justify-between shadow-md">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500/30 to-amber-700/30 border border-amber-500/40 flex items-center justify-center text-amber-300 font-bold text-lg shrink-0">
-              {currentUser.fullName.charAt(0).toUpperCase()}
+            <div className="w-12 h-12 rounded-full p-0.5 bg-gradient-to-tr from-amber-500 to-amber-600 border border-amber-500/40 overflow-hidden flex items-center justify-center shrink-0 shadow-md">
+              {currentUser.avatarUrl ? (
+                <img
+                  src={currentUser.avatarUrl}
+                  alt={currentUser.fullName}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full rounded-full object-cover"
+                />
+              ) : (
+                <span className="text-amber-300 font-bold text-lg">
+                  {currentUser.fullName.charAt(0).toUpperCase()}
+                </span>
+              )}
             </div>
             <div className="min-w-0 pr-2">
               <div className="flex items-center gap-2">
@@ -272,7 +327,7 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
               {currentUser.villageCity && (
                 <span className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5 truncate">
                   <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
-                  <span className="truncate">{currentUser.villageCity} ({currentUser.pinCode})</span>
+                  <span className="truncate">{currentUser.villageCity}</span>
                 </span>
               )}
             </div>
@@ -283,9 +338,18 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
           </div>
         </div>
 
-        {/* 3. Instagram-Style Username Search Bar */}
-        <div className="w-full flex flex-col gap-2.5">
-          <form onSubmit={handleSearchSubmit} className="relative w-full flex items-center gap-2">
+        {/* 3. Search Bar with Real-Time Filtering & View All Users Toggle */}
+        <div className="w-full flex flex-col gap-3">
+          <form
+            onSubmit={(e) => {
+              if (activeTab === 'directory') {
+                e.preventDefault();
+              } else {
+                handleSearchSubmit(e);
+              }
+            }}
+            className="relative w-full flex items-center gap-2"
+          >
             <div className="relative flex-1">
               <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
               <input
@@ -296,10 +360,14 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
                   setSearchQuery(e.target.value);
                   if (searchError) setSearchError(null);
                 }}
-                placeholder="Search registered username (e.g. mohit8976)..."
+                placeholder={
+                  activeTab === 'directory'
+                    ? 'Filter registered users by name (e.g. Mohit, Suman)...'
+                    : 'Search registered username (e.g. mohit8976)...'
+                }
                 autoCapitalize="none"
                 autoCorrect="off"
-                className="w-full pl-10 pr-9 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/80 rounded-xl text-sm font-mono text-white placeholder:text-slate-500 focus:outline-none transition-all"
+                className="w-full pl-10 pr-9 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/80 rounded-xl text-sm font-mono text-white placeholder:text-slate-500 focus:outline-none transition-all shadow-inner"
               />
               {searchQuery && (
                 <button
@@ -309,32 +377,117 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
                     setSearchError(null);
                     setFoundUser(null);
                   }}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                  title="Clear search"
                 >
                   <X className="w-4 h-4" />
                 </button>
               )}
             </div>
 
-            <button
-              id="submitSearchBtn"
-              type="submit"
-              disabled={!searchQuery.trim() || isSearching}
-              className="px-4 py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer disabled:cursor-not-allowed shadow-md shrink-0 active:scale-95"
-            >
-              {isSearching ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <>
-                  <span>Search</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </>
-              )}
-            </button>
+            {activeTab === 'messages' ? (
+              <button
+                id="submitSearchBtn"
+                type="submit"
+                disabled={!searchQuery.trim() || isSearching}
+                className="px-4 py-3 bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer disabled:cursor-not-allowed shadow-md shrink-0 active:scale-95"
+              >
+                {isSearching ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <span>Search</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </>
+                )}
+              </button>
+            ) : (
+              <button
+                id="refreshDirectoryBtn"
+                type="button"
+                onClick={fetchDirectoryUsers}
+                disabled={isLoadingDirectory}
+                className="px-3.5 py-3 bg-[#161b26] hover:bg-[#1f2637] border border-white/10 text-cyan-300 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer shadow-md shrink-0 active:scale-95"
+                title="Refresh registered users directory"
+              >
+                <RefreshCw
+                  className={`w-4 h-4 ${isLoadingDirectory ? 'animate-spin text-cyan-400' : ''}`}
+                />
+                <span className="hidden sm:inline">Refresh</span>
+              </button>
+            )}
           </form>
 
-          {/* Search Error: Strictly "User not found" */}
-          {searchError && (
+          {/* View Directory Toggle Bar */}
+          <div
+            id="viewDirectoryToggleBar"
+            className="w-full grid grid-cols-2 gap-2 p-1 bg-[#0f121a] rounded-2xl border border-white/10 shadow-sm"
+          >
+            {/* Direct Messages Tab */}
+            <button
+              id="directMessagesTabBtn"
+              type="button"
+              onClick={() => {
+                setActiveTab('messages');
+                setSearchError(null);
+              }}
+              className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'messages'
+                  ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                  : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+              }`}
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>Direct Messages</span>
+              {conversations.length > 0 && (
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                    activeTab === 'messages'
+                      ? 'bg-slate-950/20 text-slate-950'
+                      : 'bg-white/10 text-slate-300'
+                  }`}
+                >
+                  {conversations.length}
+                </span>
+              )}
+            </button>
+
+            {/* View All Users Directory Tab */}
+            <button
+              id="viewAllUsersBtn"
+              type="button"
+              onClick={() => {
+                setActiveTab('directory');
+                setSearchError(null);
+                setFoundUser(null);
+                if (!directoryLoaded) {
+                  fetchDirectoryUsers();
+                }
+              }}
+              className={`py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                activeTab === 'directory'
+                  ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 shadow-md shadow-cyan-500/25'
+                  : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>View All Users</span>
+              {directoryUsers.length > 0 && (
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold ${
+                    activeTab === 'directory'
+                      ? 'bg-slate-950/25 text-slate-950'
+                      : 'bg-white/10 text-slate-300'
+                  }`}
+                >
+                  {directoryUsers.length}
+                </span>
+              )}
+            </button>
+          </div>
+
+          {/* Search Error: Strictly "User not found" (In Messages tab) */}
+          {activeTab === 'messages' && searchError && (
             <motion.div
               initial={{ opacity: 0, y: -5 }}
               animate={{ opacity: 1, y: 0 }}
@@ -346,8 +499,8 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
             </motion.div>
           )}
 
-          {/* Valid User Found Result Card */}
-          {foundUser && (
+          {/* Valid User Found Result Card (In Messages tab) */}
+          {activeTab === 'messages' && foundUser && (
             <motion.div
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -355,8 +508,17 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
               className="p-4 rounded-2xl bg-gradient-to-r from-amber-500/15 to-[#161b26] border border-amber-500/40 flex items-center justify-between shadow-lg"
             >
               <div className="flex items-center gap-3 min-w-0 pr-2">
-                <div className="w-11 h-11 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 font-bold text-base shrink-0">
-                  {foundUser.fullName.charAt(0).toUpperCase()}
+                <div className="w-11 h-11 rounded-full p-0.5 bg-gradient-to-tr from-amber-500/60 to-amber-600/60 border border-amber-500/40 overflow-hidden flex items-center justify-center text-amber-300 font-bold text-base shrink-0 shadow-md">
+                  {foundUser.avatarUrl ? (
+                    <img
+                      src={foundUser.avatarUrl}
+                      alt={foundUser.fullName}
+                      referrerPolicy="no-referrer"
+                      className="w-full h-full rounded-full object-cover"
+                    />
+                  ) : (
+                    <span>{foundUser.fullName.charAt(0).toUpperCase()}</span>
+                  )}
                 </div>
                 <div className="min-w-0">
                   <div className="text-sm font-bold text-white truncate">
@@ -385,76 +547,243 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
           )}
         </div>
 
-        {/* 4. Instagram Direct Message Inbox List */}
-        <div className="w-full flex flex-col gap-2.5">
-          <div className="flex items-center justify-between px-1">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 font-mono">
-              <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
-              <span>Direct Messages</span>
-            </span>
-            <span className="text-[11px] font-mono text-slate-500">
-              {conversations.length} {conversations.length === 1 ? 'chat' : 'chats'}
-            </span>
-          </div>
-
-          {/* Conversations Items */}
-          {conversations.length > 0 ? (
-            <div className="w-full flex flex-col gap-2">
-              {conversations.map((conv) => (
-                <div
-                  key={conv.chatId}
-                  id={`conversation-${conv.chatId}`}
-                  onClick={() => handleInitiateChat(conv.otherUser)}
-                  className="w-full p-3.5 rounded-2xl bg-[#0f121a]/95 hover:bg-[#161b26] border border-white/[0.08] hover:border-amber-500/40 flex items-center justify-between gap-3 cursor-pointer transition-all active:scale-[0.99] group shadow-sm"
+        {/* 4. CONTENT AREA: DIRECTORY LIST vs DIRECT MESSAGES INBOX */}
+        {activeTab === 'directory' ? (
+          /* USER DIRECTORY LIST DISPLAY WITH STRICT PRIVACY MASKING */
+          <div id="usersDirectorySection" className="w-full flex flex-col gap-3">
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5 font-mono">
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Registered Users Directory</span>
+                </span>
+                <span
+                  className="text-[10px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/25 px-2 py-0.5 rounded-full flex items-center gap-1"
+                  title="Strict Privacy Masked Phone (Only 1 digit visible)"
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    {/* Participant Avatar */}
-                    <div className="w-11 h-11 rounded-xl bg-amber-500/15 border border-amber-500/25 flex items-center justify-center text-amber-300 font-bold text-base shrink-0 group-hover:scale-105 transition-transform">
-                      {conv.otherUser.fullName.charAt(0).toUpperCase()}
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-bold text-white group-hover:text-amber-300 transition-colors truncate">
-                          {conv.otherUser.fullName}
-                        </span>
-                        <span className="text-[10px] font-mono text-slate-500 shrink-0">
-                          {formatRelativeTime(conv.lastMessageTime)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2 mt-0.5">
-                        <span className="text-xs text-slate-400 truncate max-w-[220px] sm:max-w-xs block">
-                          {conv.lastMessageText}
-                        </span>
-                        <span className="text-[10px] font-mono text-amber-400/80 shrink-0">
-                          @{conv.otherUser.username}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all shrink-0" />
-                </div>
-              ))}
-            </div>
-          ) : (
-            /* Empty Inbox State */
-            <div
-              id="emptyInboxState"
-              className="w-full py-12 px-6 rounded-2xl bg-[#0f121a]/70 border border-white/[0.06] flex flex-col items-center justify-center text-center my-2"
-            >
-              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-3 shadow-inner">
-                <MessageSquare className="w-6 h-6" />
+                  <Shield className="w-2.5 h-2.5 text-amber-400" />
+                  <span>Privacy Masked</span>
+                </span>
               </div>
-              <h3 className="text-sm font-bold text-white mb-1">
-                No conversations yet
-              </h3>
-              <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
-                Search for another user by their registered username above to start an instant private 1-on-1 chat!
-              </p>
+              <span className="text-[11px] font-mono text-slate-400">
+                {filteredDirectoryUsers.length}{' '}
+                {filteredDirectoryUsers.length === 1 ? 'user' : 'users'}
+              </span>
             </div>
-          )}
-        </div>
+
+            {/* Loading Skeleton State */}
+            {isLoadingDirectory ? (
+              <div className="w-full flex flex-col gap-2.5 py-4">
+                {[1, 2, 3].map((i) => (
+                  <div
+                    key={i}
+                    className="w-full p-4 rounded-2xl bg-[#0f121a]/60 border border-white/[0.05] flex items-center justify-between animate-pulse"
+                  >
+                    <div className="flex items-center gap-3.5 flex-1">
+                      <div className="w-12 h-12 rounded-full bg-white/[0.08]" />
+                      <div className="space-y-2 flex-1">
+                        <div className="w-36 h-4 bg-white/[0.08] rounded" />
+                        <div className="w-24 h-3 bg-white/[0.05] rounded" />
+                      </div>
+                    </div>
+                    <div className="w-24 h-9 bg-white/[0.08] rounded-xl" />
+                  </div>
+                ))}
+              </div>
+            ) : filteredDirectoryUsers.length > 0 ? (
+              /* Sleek Cyberpunk/Dark-Themed User Card List */
+              <div className="w-full flex flex-col gap-2.5">
+                {filteredDirectoryUsers.map((user) => (
+                  <div
+                    key={user.username}
+                    id={`userCard-${user.username}`}
+                    className="w-full p-3.5 sm:p-4 rounded-2xl bg-[#0f121a]/95 hover:bg-[#151a26] border border-white/[0.08] hover:border-cyan-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 transition-all shadow-md group"
+                  >
+                    <div className="flex items-center gap-3.5 min-w-0 flex-1">
+                      {/* Circular Avatar */}
+                      <div className="relative w-12 h-12 rounded-full p-0.5 bg-gradient-to-tr from-cyan-500 to-blue-600 border border-cyan-500/40 overflow-hidden flex items-center justify-center shrink-0 shadow-md group-hover:scale-105 transition-transform">
+                        {user.avatarUrl ? (
+                          <img
+                            src={user.avatarUrl}
+                            alt={user.fullName}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full rounded-full object-cover"
+                          />
+                        ) : (
+                          <span className="text-cyan-300 font-bold text-lg">
+                            {user.fullName.charAt(0).toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* User Info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors truncate">
+                            {user.fullName}
+                          </span>
+                          <span className="text-[11px] font-mono text-cyan-400/80">
+                            @{user.username}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                          {/* Privacy-Masked Phone Badge (Replaces first 9 digits with * and reveals ONLY final single digit) */}
+                          <div
+                            id={`maskedPhone-${user.username}`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 text-[11px] font-mono font-medium shadow-inner"
+                            title="Strictly Privacy Masked (Only last 1 digit visible)"
+                          >
+                            <Shield className="w-3 h-3 text-amber-400 shrink-0" />
+                            <span className="tracking-wider">
+                              {maskPhone(user.phone || user.mobileNumber)}
+                            </span>
+                          </div>
+
+                          {user.villageCity && (
+                            <span className="text-[11px] text-slate-400 flex items-center gap-1 truncate">
+                              <MapPin className="w-3 h-3 text-slate-500 shrink-0" />
+                              <span className="truncate">{user.villageCity}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick "Chat Now" Button */}
+                    <button
+                      id={`chatNowBtn-${user.username}`}
+                      type="button"
+                      onClick={() => handleInitiateChat(user)}
+                      className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 shadow-md shadow-cyan-500/20 transition-all cursor-pointer active:scale-95 shrink-0"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5 fill-slate-950" />
+                      <span>Chat Now</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              /* Empty Directory Filter State */
+              <div
+                id="emptyDirectoryState"
+                className="w-full py-12 px-6 rounded-2xl bg-[#0f121a]/70 border border-white/[0.06] flex flex-col items-center justify-center text-center my-2"
+              >
+                <div className="w-12 h-12 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 mb-3 shadow-inner">
+                  <Users className="w-6 h-6" />
+                </div>
+                <h3 className="text-sm font-bold text-white mb-1">
+                  {searchQuery ? 'No matching users found' : 'No registered users found'}
+                </h3>
+                <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                  {searchQuery
+                    ? `No registered user matches "${searchQuery}". Check the spelling or clear the filter.`
+                    : 'Registered users will appear here automatically with privacy masking.'}
+                </p>
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="mt-3 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs text-white font-semibold transition-colors cursor-pointer"
+                  >
+                    Clear Filter
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          /* DIRECT MESSAGES INBOX LIST */
+          <div className="w-full flex flex-col gap-2.5">
+            <div className="flex items-center justify-between px-1">
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5 font-mono">
+                <MessageSquare className="w-3.5 h-3.5 text-amber-400" />
+                <span>Direct Messages</span>
+              </span>
+              <span className="text-[11px] font-mono text-slate-500">
+                {conversations.length} {conversations.length === 1 ? 'chat' : 'chats'}
+              </span>
+            </div>
+
+            {/* Conversations Items */}
+            {conversations.length > 0 ? (
+              <div className="w-full flex flex-col gap-2">
+                {conversations.map((conv) => (
+                  <div
+                    key={conv.chatId}
+                    id={`conversation-${conv.chatId}`}
+                    onClick={() => handleInitiateChat(conv.otherUser)}
+                    className="w-full p-3.5 rounded-2xl bg-[#0f121a]/95 hover:bg-[#161b26] border border-white/[0.08] hover:border-amber-500/40 flex items-center justify-between gap-3 cursor-pointer transition-all active:scale-[0.99] group shadow-sm"
+                  >
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      {/* Participant Circular Avatar */}
+                      <div className="w-11 h-11 rounded-full p-0.5 bg-amber-500/20 border border-amber-500/30 overflow-hidden flex items-center justify-center text-amber-300 font-bold text-base shrink-0 group-hover:scale-105 transition-transform shadow-sm">
+                        {conv.otherUser.avatarUrl ? (
+                          <img
+                            src={conv.otherUser.avatarUrl}
+                            alt={conv.otherUser.fullName}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full rounded-full object-cover"
+                          />
+                        ) : (
+                          <span>{conv.otherUser.fullName.charAt(0).toUpperCase()}</span>
+                        )}
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-bold text-white group-hover:text-amber-300 transition-colors truncate">
+                            {conv.otherUser.fullName}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-500 shrink-0">
+                            {formatRelativeTime(conv.lastMessageTime)}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 mt-0.5">
+                          <span className="text-xs text-slate-400 truncate max-w-[220px] sm:max-w-xs block">
+                            {conv.lastMessageText}
+                          </span>
+                          <span className="text-[10px] font-mono text-amber-400/80 shrink-0">
+                            @{conv.otherUser.username}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <ChevronRight className="w-4 h-4 text-slate-600 group-hover:text-amber-400 group-hover:translate-x-0.5 transition-all shrink-0" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              /* Empty Inbox State with Quick Action to View All Users */
+              <div
+                id="emptyInboxState"
+                className="w-full py-12 px-6 rounded-2xl bg-[#0f121a]/70 border border-white/[0.06] flex flex-col items-center justify-center text-center my-2"
+              >
+                <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-3 shadow-inner">
+                  <MessageSquare className="w-6 h-6" />
+                </div>
+                <h3 className="text-sm font-bold text-white mb-1">
+                  No conversations yet
+                </h3>
+                <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                  Search for a user by their registered username or browse the directory of all registered users to start an instant encrypted chat!
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('directory');
+                    if (!directoryLoaded) fetchDirectoryUsers();
+                  }}
+                  className="mt-4 px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow-md shadow-cyan-500/20 cursor-pointer active:scale-95"
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Browse Registered Users</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </main>
 
       {/* 5. Secret Emoji Gateway Interstitial Modal */}

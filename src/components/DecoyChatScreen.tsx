@@ -83,8 +83,8 @@ export const DecoyChatScreen: React.FC<DecoyChatScreenProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSendMessage = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSendMessage = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!inputText.trim()) return;
 
     const userMsg: DecoyMessage = {
@@ -240,19 +240,20 @@ export const DecoyChatScreen: React.FC<DecoyChatScreenProps> = ({
 
       {/* 3. Input Footer */}
       <footer className="w-full max-w-2xl px-4 py-3 bg-[#0f121a]/95 backdrop-blur-xl border-t border-white/10 shrink-0 sticky bottom-0">
-        <form onSubmit={handleSendMessage} className="flex items-center gap-2">
-          <input
+        <form onSubmit={(e) => e.preventDefault()} className="flex items-end gap-2">
+          <textarea
             id="decoyChatInput"
-            type="text"
+            rows={1}
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             placeholder="Inquire tracking # or shipment update..."
-            className="flex-1 px-4 py-3 bg-[#161b26] border border-white/10 focus:border-blue-500/60 rounded-xl text-xs font-mono text-white placeholder:text-slate-500 focus:outline-none transition-all"
+            className="flex-1 max-h-32 min-h-[44px] px-4 py-3 bg-[#161b26] border border-white/10 focus:border-blue-500/60 rounded-xl text-xs font-mono text-white placeholder:text-slate-500 focus:outline-none transition-all resize-none leading-relaxed overflow-y-auto"
           />
           <button
-            type="submit"
+            type="button"
+            onClick={() => handleSendMessage()}
             disabled={!inputText.trim()}
-            className="p-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-xl transition-all cursor-pointer disabled:cursor-not-allowed"
+            className="p-3 min-w-[44px] min-h-[44px] flex items-center justify-center bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded-xl transition-all cursor-pointer disabled:cursor-not-allowed mb-0.5 shrink-0"
           >
             <Send className="w-4 h-4" />
           </button>

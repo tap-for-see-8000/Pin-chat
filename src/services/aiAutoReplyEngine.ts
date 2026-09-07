@@ -6,9 +6,11 @@
  * 1. Strict Eligibility & Anti-Loop Pipeline Trigger Filters
  * 2. 2.5s Multi-Message Debounce per chatId
  * 3. 3-Layer Context Assembly (Memory Summary, Chronological History, Target Messages)
- * 4. Gemini 1.5 Flash with Anti-Filler Rules & Strict Persona Tuning
- * 5. Stealth Typing & Human Timing Engine (2.2s - 6.8s delay)
- * 6. Atomic Database Commit & Safe Finally Cleanup
+ * 4. Human Texting Persona with Strict Anti-Bot Rules & Language Mirroring
+ * 5. Generation Config: temperature = 0.7, maxOutputTokens = 60
+ * 6. Multi-stage Output Sanitizer & Natural Human Fallback Engine
+ * 7. Stealth Typing & Human Timing Engine (2.2s - 6.8s delay)
+ * 8. Atomic Database Commit & Safe Finally Cleanup
  */
 
 import { GoogleGenAI } from '@google/genai';
@@ -158,6 +160,7 @@ async function executeAutoReplyPipeline(chatId: string): Promise<void> {
 
   const cleanCurrentUser = currentUsername.trim().toLowerCase();
   const cleanPartnerUser = targetUser.username.trim().toLowerCase();
+  const partnerName = targetUser.fullName || targetUser.username;
   const channelName = `pinchat_channel_${chatId}`;
 
   // Broadcast typing helper
@@ -241,7 +244,11 @@ async function executeAutoReplyPipeline(chatId: string): Promise<void> {
       }
     }
 
-    // LAYER B: Recent 35 Chronological Messages (Both User A and User B)
+    // Target Unanswered Messages from Partner
+    const targetIds = new Set(targetMessages.map((m) => m.messageId));
+    const bundledPartnerText = targetMessages.map((m) => m.text).join('\n').trim();
+
+    // LAYER B: Recent 35 Chronological Messages (Excluding the target incoming messages)
     const recentDialogue: Array<{ senderName: string; text: string; isCurrentUser: boolean }> = [];
     if (db) {
       try {
@@ -252,14 +259,16 @@ async function executeAutoReplyPipeline(chatId: string): Promise<void> {
         const fetched: ChatMessage[] = [];
         snap.forEach((d) => {
           const data = d.data();
-          fetched.push({
-            messageId: d.id,
-            chatId,
-            senderUsername: data.senderUsername || '',
-            senderName: data.senderName || '',
-            text: data.text || '',
-            createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
-          });
+          if (!targetIds.has(d.id)) {
+            fetched.push({
+              messageId: d.id,
+              chatId,
+              senderUsername: data.senderUsername || '',
+              senderName: data.senderName || '',
+              text: data.text || '',
+              createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
+            });
+          }
         });
 
         // Reverse to chronological order (oldest to newest)
@@ -277,35 +286,60 @@ async function executeAutoReplyPipeline(chatId: string): Promise<void> {
       }
     }
 
-    // LAYER C: Target Unanswered Messages from Partner
-    const bundledPartnerText = targetMessages.map((m) => m.text).join('\n');
-    const partnerName = targetUser.fullName || targetUser.username;
-
-    // 4. GEMINI 1.5 FLASH SYSTEM INSTRUCTION & STRICT QUALITY CONTROLS
+    // 4. SYSTEM INSTRUCTION & HUMAN-LIKE NATURAL CHAT DIRECTIVES
     const styleProfiles: Record<AutoReplyStyle, string> = {
-      friend:
-        'Warm, witty, relaxed, authentic friendly vibe. Talk like an everyday close friend.',
-      casual:
-        'Chill, casual, natural, brief, everyday texting tone.',
-      supportive:
-        'Empathetic, caring, thoughtful, emotionally supportive, attentive.',
-      professional:
-        'Courteous, articulate, prompt, polite, reliable, professional.',
+      friend: 'Warm, relaxed, witty, and authentic friendly texting vibe.',
+      casual: 'Laid-back, chill, very brief, everyday texting tone.',
+      supportive: 'Thoughtful, caring, empathetic, warm, and attentive.',
+      professional: 'Polite, clear, helpful, courteous, without being stiff or robotic.',
     };
 
     const chosenStyleDescription = styleProfiles[settings.style] || styleProfiles.friend;
 
-    const systemInstruction = `You are strictly acting on behalf of ${currentFullName} (@${currentUsername}) replying to your chat partner ${partnerName} (@${cleanPartnerUser}) in a private 1-on-1 chat.
-Tone & Persona: ${chosenStyleDescription}
+    const systemInstruction = `You are secretly texting as ${currentFullName} (@${currentUsername}) to ${partnerName} (@${cleanPartnerUser}) on a personal messaging app.
 
-MANDATORY RULES:
-1. Speak strictly in the authentic voice of ${currentFullName}. NEVER acknowledge or reveal that you are an AI, machine, bot, or virtual assistant.
-2. STRICT ANTI-FILLER RULE: Zero repetition of dry generic fillers (such as "हाँ भाई", "ठीक है", "अच्छा", "मैं सुन रहा हूँ", "हाँ जी", "Sure thing", "Understood") unless directly answering a yes/no question. Always reply with genuine substance, authentic human emotion, and relevance.
-3. UNDERSTAND FULL DIALOGUE: Read the entire conversation history to understand context, but formulate your response ONLY addressing the partner's latest incoming message(s).
-4. SPECIFIC QUESTIONS: If the partner asked a question, provide a direct contextual answer, plus an optional natural follow-up thought (do not force questions).
-5. NO HALLUCINATIONS: Strictly prohibit hallucinating or inventing specific personal facts, secret locations, or commitments not grounded in the chat history.
-6. LANGUAGE MATCHING: Match the exact language of the partner (Hindi, Hinglish, or English) naturally.
-7. LENGTH: Keep response brief and realistic: 1 to 2 sentences (maximum 3 short sentences), exactly like a real person typing on a smartphone.`;
+Persona:
+A real human texting back casually. Style: ${chosenStyleDescription}.
+
+Length Rule:
+Mirror the brevity of the incoming message. Very short questions receive very short answers.
+If the partner writes 1-5 words, reply in 2-8 words.
+Default behavior must be SHORT, NATURAL, and PUNCHY. Never write essays, paragraphs, bullet points, or robotic explanations.
+
+Language Rule:
+Match the incoming language and dialect closely: Hinglish, Hindi (Devanagari script), Bhojpuri/regional language, or casual English.
+Never switch language unless the partner initiates a switch.
+Never use overly formal English (e.g., use "I'm at home", NOT "I am currently at my residence").
+
+Context Rule:
+Read both sides of the recent conversation to understand the situation, but generate a response ONLY to the partner's current incoming message.
+Never reply to ${currentFullName}'s own previous messages as if they were questions.
+
+Human Rule:
+Sound natural, casual, spontaneous, and conversational like someone quickly typing on a smartphone.
+Natural conversational words like "haan", "acha", "arey", "hmm", "haan bol", "bata", "theek", "sahi", "lol", "yaar", "bhai" are allowed when appropriate, but do not spam them.
+Use emojis very sparingly and only when the tone truly fits. Strictly avoid putting an emoji in every single reply.
+
+Zero-Context Rule:
+If conversation history is empty or this is a brand new chat, do not be confused or apologize.
+Answer greetings or ice-breakers naturally:
+- "Hi" / "Hey" -> "Haan bol" or "Hey, kya haal?"
+- "Kaha ho?" -> "Ghar pe hu"
+- "Kya kar rahe?" -> "Bas baitha hu"
+- "Aur batao" -> "Bas badhiya, tu bata"
+
+Factual Grounding:
+Do not invent specific fake locations, cities, or commitments unless mentioned in the chat.
+If you don't know where you are or what's happening, say "Yahin hu, bol" or "Bas idhar hi, kya hua?".
+
+If you don't know something or lack information:
+Respond naturally like a friend: "Yaad nahi abhi", "Nahi pata bhai", "Pata nahi yaar", "Haan, shayad", "Achha?", "Kya hua?", "Bata na".
+
+ABSOLUTE NEGATIVE CONSTRAINTS (STRICTLY FORBIDDEN):
+- Never mention or hint that you are an AI, bot, assistant, machine, system, or automated program.
+- Never use technical, system-state, or connection phrases such as:
+  "Thodi der me connect ho jayega", "Mai yahi hu dekh raha hu", "Mai yahi hu dekh rahi hu", "System check kar raha hu", "System check kar rahi hu", "Loading...", "Connecting...", "Connection ho raha hai", "Connect ho raha hai", "Context nahi mila", "Mujhe context nahi mila", "As an AI...", "AI ke according...", "Assistant...", "Bot...", "Main process kar raha hu", "Main analyze kar raha hu", "Request process...", "Please wait...", "Error...", "Technical issue...", "Server...", "Network...", "Data load...", "Conversation load...", "History available nahi...", or any generic excuses.
+- Output ONLY the raw human message text. Do not wrap in quotation marks. Do not prepend speaker names or labels.`;
 
     let generatedReply = '';
 
@@ -318,37 +352,13 @@ MANDATORY RULES:
       try {
         const ai = new GoogleGenAI({ apiKey });
 
-        // Build context contents
-        const contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
-
-        if (memorySummary) {
-          contents.push({
-            role: 'user',
-            parts: [{ text: `[Long-term memory recap of past chats: ${memorySummary}]` }],
-          });
-          contents.push({
-            role: 'model',
-            parts: [{ text: 'Understood the background context.' }],
-          });
-        }
-
-        // Add recent dialogue history
-        if (recentDialogue.length > 0) {
-          // Take up to last 20 for prompt
-          const sliceHistory = recentDialogue.slice(-20);
-          for (const item of sliceHistory) {
-            contents.push({
-              role: item.isCurrentUser ? 'model' : 'user',
-              parts: [{ text: `${item.senderName}: ${item.text}` }],
-            });
-          }
-        }
-
-        // Add Target Unanswered Message
-        contents.push({
-          role: 'user',
-          parts: [{ text: `${partnerName}: ${bundledPartnerText}` }],
-        });
+        // Build valid alternating conversation turns for Gemini
+        const contents = buildAlternatingContents(
+          memorySummary,
+          recentDialogue,
+          partnerName,
+          bundledPartnerText
+        );
 
         const response = await ai.models.generateContent({
           model: 'gemini-1.5-flash',
@@ -356,19 +366,31 @@ MANDATORY RULES:
           config: {
             systemInstruction,
             temperature: 0.7,
-            maxOutputTokens: 250,
+            maxOutputTokens: 60,
           },
         });
 
-        generatedReply = response.text?.trim() || '';
+        const rawOutput = response.text?.trim() || '';
+        generatedReply = cleanAndSanitizeReply(
+          rawOutput,
+          bundledPartnerText,
+          settings.style,
+          partnerName,
+          currentFullName,
+          currentUsername
+        );
       } catch (geminiErr) {
         console.warn('[AutoReplyEngine] Gemini generation note:', geminiErr);
       }
     }
 
-    // Smart contextual fallback if API key is missing or failed (Never dry generic filler)
+    // Smart contextual fallback if API key is missing or failed (Never dry generic filler or bot phrases)
     if (!generatedReply) {
-      generatedReply = generateSmartFallbackReply(bundledPartnerText, settings.style, partnerName);
+      generatedReply = generateSmartFallbackReply(
+        bundledPartnerText,
+        settings.style,
+        partnerName
+      );
     }
 
     // 5. HUMAN RESPONSE TIMING: Insert random delay between 2.2s and 6.8s (e.g. 2.4s, 3.8s, 5.1s)
@@ -433,7 +455,7 @@ MANDATORY RULES:
     // Save conversation item for Inbox preview
     saveConversationItem(currentUsername, targetUser, generatedReply, now);
 
-    // Broadcast new message
+    // Broadcast new message across tabs
     if (typeof BroadcastChannel !== 'undefined') {
       try {
         const ch = new BroadcastChannel(channelName);
@@ -469,51 +491,363 @@ MANDATORY RULES:
 }
 
 /**
- * High-quality contextual fallback responses matching user tone without repeating dry fillers
+ * Builds alternating user/model content blocks for the Gemini API
+ */
+function buildAlternatingContents(
+  memorySummary: string,
+  recentDialogue: Array<{ senderName: string; text: string; isCurrentUser: boolean }>,
+  partnerName: string,
+  bundledPartnerText: string
+): Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> {
+  const rawTurns: Array<{ role: 'user' | 'model'; text: string }> = [];
+
+  if (memorySummary) {
+    rawTurns.push({
+      role: 'user',
+      text: `[Context from past chats: ${memorySummary}]`,
+    });
+    rawTurns.push({
+      role: 'model',
+      text: 'Got it.',
+    });
+  }
+
+  // Recent history (take up to last 16 messages)
+  const historySlice = recentDialogue.slice(-16);
+  for (const item of historySlice) {
+    rawTurns.push({
+      role: item.isCurrentUser ? 'model' : 'user',
+      text: `${item.senderName}: ${item.text}`,
+    });
+  }
+
+  // Target current unanswered incoming message
+  rawTurns.push({
+    role: 'user',
+    text: `${partnerName}: ${bundledPartnerText}`,
+  });
+
+  // Consolidate adjacent turns with same role to ensure strict alternating turns
+  const consolidated: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+
+  for (const turn of rawTurns) {
+    if (consolidated.length > 0 && consolidated[consolidated.length - 1].role === turn.role) {
+      consolidated[consolidated.length - 1].parts.push({ text: turn.text });
+    } else {
+      consolidated.push({
+        role: turn.role,
+        parts: [{ text: turn.text }],
+      });
+    }
+  }
+
+  // Ensure first turn is 'user'
+  if (consolidated.length > 0 && consolidated[0].role !== 'user') {
+    consolidated.unshift({
+      role: 'user',
+      parts: [{ text: 'Hey' }],
+    });
+  }
+
+  return consolidated;
+}
+
+/**
+ * Cleans, sanitizes, and filters model outputs.
+ * Strips quotes, speaker prefixes, markdown, and discards any forbidden bot phrases.
+ */
+function cleanAndSanitizeReply(
+  rawText: string,
+  incomingText: string,
+  style: AutoReplyStyle,
+  partnerName: string,
+  currentFullName: string,
+  currentUsername: string
+): string {
+  if (!rawText) {
+    return generateSmartFallbackReply(incomingText, style, partnerName);
+  }
+
+  let cleaned = rawText.trim();
+
+  // 1. Remove wrapping quotes ("...", '...', “...”, «...»)
+  cleaned = cleaned.replace(/^["'“”«»]+|["'“”«»]+$/g, '').trim();
+
+  // 2. Remove common AI/speaker prefixes like "Suman:", "Assistant:", "AI:", "Bot:", "Me:", "@username:"
+  const prefixRegex = new RegExp(
+    `^(?:${escapeRegex(currentFullName)}|${escapeRegex(currentUsername)}|assistant|ai|bot|model|me|you|system)\\s*:\\s*`,
+    'i'
+  );
+  cleaned = cleaned.replace(prefixRegex, '').trim();
+
+  // 3. Remove markdown formatting like **bold**, *italics*, `code`
+  cleaned = cleaned.replace(/[*_~`]/g, '').trim();
+
+  // 4. Remove surrounding quotes again if newly exposed
+  cleaned = cleaned.replace(/^["'“”«»]+|["'“”«»]+$/g, '').trim();
+
+  // 5. Check against forbidden bot / system phrases
+  const FORBIDDEN_PATTERNS = [
+    /connect\s*ho\s*jayega/i,
+    /connect\s*karte\s*hain/i,
+    /mai\s*yahi\s*hu\s*dekh\s*raha/i,
+    /mai\s*yahi\s*hu\s*dekh\s*rahi/i,
+    /yahi\s*dekh\s*raha\s*tha/i,
+    /system\s*check/i,
+    /loading/i,
+    /connecting/i,
+    /connection\s*ho\s*raha/i,
+    /connect\s*ho\s*raha/i,
+    /context\s*nahi\s*mila/i,
+    /mujhe\s*context/i,
+    /as\s*an\s*ai/i,
+    /ai\s*ke\s*according/i,
+    /\bassistant\b/i,
+    /\bbot\b/i,
+    /main\s*process\s*kar\s*raha/i,
+    /main\s*analyze\s*kar\s*raha/i,
+    /request\s*process/i,
+    /please\s*wait/i,
+    /\berror\b/i,
+    /technical\s*issue/i,
+    /\bserver\b/i,
+    /\bnetwork\b/i,
+    /data\s*load/i,
+    /conversation\s*load/i,
+    /history\s*available\s*nahi/i,
+    /language\s*model/i,
+    /virtual\s*assistant/i,
+    /artificial\s*intelligence/i,
+    /i\s*am\s*an\s*ai/i,
+    /i\s*don'?t\s*have\s*(enough\s*)?context/i,
+    /can\s*you\s*provide\s*more\s*information/i,
+  ];
+
+  for (const pattern of FORBIDDEN_PATTERNS) {
+    if (pattern.test(cleaned)) {
+      console.warn('[AutoReplyEngine] Forbidden bot phrase detected, replacing with natural fallback:', cleaned);
+      return generateSmartFallbackReply(incomingText, style, partnerName);
+    }
+  }
+
+  // 6. If result is empty after cleaning
+  if (!cleaned) {
+    return generateSmartFallbackReply(incomingText, style, partnerName);
+  }
+
+  return cleaned;
+}
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Natural, human-like contextual fallback engine.
+ * Never uses technical phrases, connection excuses, or robotic templates.
+ * Strictly matches dialect (Hindi, Bhojpuri, Hinglish, English) and length.
  */
 function generateSmartFallbackReply(
   partnerText: string,
   style: AutoReplyStyle,
-  partnerName: string
+  _partnerName: string
 ): string {
-  const lower = partnerText.toLowerCase();
+  const text = (partnerText || '').trim();
+  const lower = text.toLowerCase();
 
-  const isQuestion =
-    partnerText.includes('?') ||
+  const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+
+  // 1. Detect Script / Dialect
+  const hasDevanagari = /[\u0900-\u097F]/.test(text);
+
+  const isBhojpuri =
+    text.includes('बाड़') ||
+    text.includes('बानी') ||
+    text.includes('करताड़') ||
+    text.includes('का हाल बा') ||
+    text.includes('कहाँ बा') ||
+    text.includes('का भईल') ||
+    lower.includes('baada') ||
+    lower.includes('baani') ||
+    lower.includes('ka haal ba') ||
+    lower.includes('ka karat');
+
+  // 2. Bhojpuri Dialect Responses
+  if (isBhojpuri) {
+    if (text.includes('कहाँ') || lower.includes('kahan') || lower.includes('kaha')) {
+      return pick(['घरे बानी', 'बस घरे बानी', 'यहीं बानी, बोला']);
+    }
+    if (text.includes('का हाल') || lower.includes('haal')) {
+      return pick(['सब बढ़िया बा', 'सब बढ़िया बा, आपन बतावा', 'एकदम मस्त बा']);
+    }
+    if (text.includes('का करता') || lower.includes('karat')) {
+      return pick(['बस बइठल बानी', 'कुछु ना, बस बइठल बानी', 'काम करत बानी']);
+    }
+    return pick(['हाँ बोला', 'सब ठीक बा', 'हाँ, का बात बा?']);
+  }
+
+  // 3. Pure Hindi / Devanagari Script Responses
+  if (hasDevanagari) {
+    if (style === 'professional') {
+      if (text.includes('कहाँ')) return 'कार्यालय में हूँ। बताइए?';
+      if (text.includes('नमस्ते') || text.includes('प्रणाम') || text.includes('हेलो')) {
+        return 'नमस्ते! कहिए, कैसे मदद कर सकता हूँ?';
+      }
+      return 'जी, मैंने देख लिया। कुछ समय में उत्तर देता हूँ।';
+    }
+
+    // Greetings
+    if (text.includes('नमस्ते') || text.includes('हेलो') || text.includes('हाय') || text === 'हाँ') {
+      return pick(['हाँ बोलो', 'हे, कैसे हो?', 'हाँ जी, बताइए']);
+    }
+    // Location
+    if (text.includes('कहाँ') || text.includes('किधर')) {
+      return pick(['घर पर हूँ', 'बस घर पे हूँ', 'यहीं हूँ, बोलो', 'घर पर ही हूँ']);
+    }
+    // Activity
+    if (text.includes('क्या कर') || text.includes('क्या हो')) {
+      return pick(['बस बैठा हूँ', 'कुछ नहीं, बस बैठा हूँ', 'बस फ्री हूँ अभी, तुम बताओ']);
+    }
+    // Status / General
+    if (text.includes('और बताओ') || text.includes('और?') || text.includes('क्या हाल')) {
+      return pick(['सब बढ़िया, तुम बताओ', 'बस सब ठीक है, तुम सुनाओ', 'सब मस्त']);
+    }
+    // Free / availability
+    if (text.includes('फ्री')) {
+      return pick(['हाँ, बोलो', 'हाँ फ्री हूँ, बताओ']);
+    }
+
+    // Default short Devanagari human reply
+    return pick(['हाँ बोलो', 'अच्छा? क्या हुआ?', 'सब ठीक, तुम बताओ', 'बताओ ना']);
+  }
+
+  // 4. English Detection (No common Hinglish markers)
+  const hinglishMarkers = ['kaha', 'kahan', 'kidhar', 'kya', 'bhai', 'yaar', 'bata', 'aur', 'suno', 'sun', 'theek', 'thik', 'hai', 'babu', 'batao', 'achha', 'acha', 'sab'];
+  const hasHinglishMarker = hinglishMarkers.some((w) => lower.includes(w));
+  const isEnglish = !hasHinglishMarker && /^[a-z0-9\s.,!?'"()_-]+$/i.test(text);
+
+  if (isEnglish) {
+    if (style === 'professional') {
+      if (lower.includes('where')) return 'Currently at my desk, please let me know.';
+      if (lower.includes('hi') || lower.includes('hello')) return 'Hello, hope you are doing well.';
+      return 'Noted, I will review and follow up shortly.';
+    }
+
+    // Greetings
+    if (lower === 'hi' || lower === 'hello' || lower === 'hey' || lower === 'hii' || lower === 'yo') {
+      return pick(['Hey! What’s up?', 'Hey, how’s it going?', 'Hey, all good?']);
+    }
+    // Location
+    if (lower.includes('where') || lower.includes('where are you') || lower.includes('where r u')) {
+      return pick(['At home, what’s up?', 'I’m at home', 'Around here, tell me']);
+    }
+    // Activity
+    if (lower.includes('doing') || lower.includes('wyd') || lower.includes('sup') || lower.includes("what's up")) {
+      return pick(['Not much, just chilling. You?', 'Nothing much, you?', 'Just wrapped up. What’s up?']);
+    }
+    // Status
+    if (lower.includes('how are you') || lower.includes('how r u')) {
+      return pick(['Doing good, you?', 'All good here! How about you?']);
+    }
+    // Free
+    if (lower.includes('free')) {
+      return pick(['Yeah, tell me', 'Yeah, what’s up?']);
+    }
+
+    return pick(['Yeah, tell me', 'All good, what about you?', 'Not much, tell me']);
+  }
+
+  // 5. Hinglish (Casual, Everyday Texting - Default)
+  if (style === 'professional') {
+    if (lower.includes('kaha') || lower.includes('kahan')) {
+      return 'Office me hu. Bataiye kya kaam tha?';
+    }
+    if (lower.includes('hi') || lower.includes('hello')) {
+      return 'Hello, hope all is well. Bataiye?';
+    }
+    return 'Noted. Main thoda dekh kar update karta hu.';
+  }
+
+  // Greetings / Ice-breakers
+  if (
+    lower === 'hi' ||
+    lower === 'hello' ||
+    lower === 'hey' ||
+    lower === 'hii' ||
+    lower === 'suno' ||
+    lower === 'sun' ||
+    lower === 'bhai' ||
+    lower === 'bro'
+  ) {
+    return pick(['Haan bol 😄', 'Haan bol', 'Hey, kya haal?', 'Haan bolo', 'Bol na']);
+  }
+
+  // Location questions
+  if (
+    lower.includes('kaha') ||
     lower.includes('kahan') ||
-    lower.includes('where') ||
-    lower.includes('kab') ||
-    lower.includes('when') ||
-    lower.includes('kaise') ||
-    lower.includes('how') ||
-    lower.includes('kya');
-
-  if (style === 'friend') {
-    if (isQuestion) {
-      return 'Haan, bas thoda sa busy tha! Bol, kya chal raha hai?';
-    }
-    return 'Mast! Main bhi yahi dekh raha tha, thodi der me connect karte hain.';
+    lower.includes('kidhar') ||
+    lower.includes('where')
+  ) {
+    return pick(['Ghar pe hu', 'Bas ghar pe', 'Yahin hu, bol', 'Ghar pe hi hu']);
   }
 
-  if (style === 'casual') {
-    if (isQuestion) {
-      return 'Just wrapped up some work. Everything good on your side?';
-    }
-    return 'Sounds good! Catch you in a bit.';
+  // Activity questions
+  if (
+    lower.includes('kya kar') ||
+    lower.includes('kya chal') ||
+    lower.includes('wyd') ||
+    lower.includes('scene')
+  ) {
+    return pick([
+      'Bas baitha hu',
+      'Kuch khaas nahi, tu bata',
+      'Bas baitha hu, tu bol',
+      'Kuch nahi yaar, tu bata',
+    ]);
   }
 
-  if (style === 'supportive') {
-    if (isQuestion) {
-      return 'Take your time, no rush at all! Hope your day is going peacefully.';
-    }
-    return 'I completely understand! Always here if you want to chat more.';
+  // Status / Conversation starters
+  if (
+    lower.includes('aur batao') ||
+    lower.includes('aur bata') ||
+    lower === 'aur' ||
+    lower === 'aur?' ||
+    lower.includes('kya haal')
+  ) {
+    return pick([
+      'Bas badhiya, tu bata',
+      'Sab sahi hai, tu bol',
+      'Bas chal raha hai, tu bata',
+      'Sab mast, tu bata',
+    ]);
   }
 
-  // Professional
-  if (isQuestion) {
-    return 'Thank you for reaching out. I have noted this and will review the details shortly.';
+  // Availability / Quick questions
+  if (lower.includes('free hai') || lower.includes('free ho') || lower.includes('busy')) {
+    return pick(['Haan, bol', 'Haan free hu, bata', 'Haan bol na']);
   }
-  return 'Thank you for the update. I will keep this in mind and follow up accordingly.';
+
+  // Single word acknowledgments
+  if (lower === 'hmm' || lower === 'hm') {
+    return pick(['Kya soch raha?', 'Aur bata', 'Haan']);
+  }
+  if (lower === 'haan' || lower === 'han' || lower === 'ha') {
+    return pick(['Aur bata', 'Sahi hai', 'Haan']);
+  }
+  if (lower === 'acha' || lower === 'achha' || lower === 'ok' || lower === 'theek') {
+    return pick(['Haan', 'Aur bata kya scene hai?', 'Sahi hai']);
+  }
+
+  // Unclear context / Missing info human response
+  return pick([
+    'Haan bol',
+    'Bas yahi hu, bol',
+    'Achha? Kya hua?',
+    'Bata na',
+    'Nahi pata yaar',
+    'Yaad nahi abhi',
+  ]);
 }
 
 /**
@@ -587,3 +921,4 @@ export function getChatAutoReplySettings(
     style: 'friend',
   };
 }
+

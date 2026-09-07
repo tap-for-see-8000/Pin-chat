@@ -1,6 +1,6 @@
 {
   "name": "PIN Chat",
   "description": "Instant, private 1-on-1 text messaging with registered user search, direct chat inbox, and Gemini AI auto-reply with Cinematic Dark visual styling.",
-  "requestFramePermissions": ["microphone"],
+  "requestFramePermissions": ["microphone", "geolocation"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
