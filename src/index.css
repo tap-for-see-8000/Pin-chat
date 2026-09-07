@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+:root {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  
+  --bg-canvas: #07090e;
+  --bg-surface: #0f121a;
+  --bg-surface-elevated: #161b26;
+  --bg-surface-hover: #1c2230;
+  
+  --border-subtle: rgba(255, 255, 255, 0.07);
+  --border-medium: rgba(255, 255, 255, 0.12);
+  --border-accent: rgba(245, 158, 11, 0.4);
+  
+  --accent-gold: #f59e0b;
+  --accent-amber-light: #fbbf24;
+  --accent-glow: rgba(245, 158, 11, 0.15);
+  
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--bg-canvas);
+  color: var(--text-primary);
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Cinematic Ambient Glow */
+.cinematic-glow {
+  background: radial-gradient(circle at 50% 20%, rgba(245, 158, 11, 0.08) 0%, transparent 60%),
+              radial-gradient(circle at 80% 80%, rgba(99, 102, 241, 0.05) 0%, transparent 50%),
+              #07090e;
+}
+
+.pin-font {
+  font-family: var(--font-mono);
+  letter-spacing: 0.18em;
+}
+
+/* Custom Subtle Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090c12;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e2433;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #2d354b;
+}
