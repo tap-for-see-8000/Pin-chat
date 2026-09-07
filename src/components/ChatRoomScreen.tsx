@@ -201,7 +201,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
 
       const persona = selectedPersonaRef.current;
       const myUid = user.uid || 'current-user-id';
-      const myName = user.displayName || 'Me';
+      const myName = `${persona} AI`;
 
       emitTypingState(true, `${persona} AI`);
 
@@ -211,7 +211,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           (typeof process !== 'undefined' ? process.env.GEMINI_API_KEY : '') ||
           '';
 
-        const systemPrompt = `You are auto-replying on behalf of the user in an ongoing private chat. Adopt the personality, tone, and mannerisms of a ${persona}. Match the language of the sender (Hindi, Hinglish, or English). Reply naturally, concisely, and conversationally. Do NOT sound like an AI assistant or bot. Output only the direct message.`;
+        const systemPrompt = `You are a real partner conversing in a private chat. Adopt the personality, tone, and mannerisms of a ${persona}. Match the language of the message (Hindi, Hinglish, or English). Reply naturally, concisely, and lovingly/conversationally. Do NOT sound like an AI bot. Output only the message text.`;
 
         let generatedText = '';
 
@@ -219,7 +219,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           const ai = new GoogleGenAI({ apiKey });
 
           const recentChat = currentHistory.slice(-6).map((m) => ({
-            role: m.senderUid === myUid ? ('user' as const) : ('model' as const),
+            role: m.isAi ? ('model' as const) : ('user' as const),
             parts: [{ text: `${m.senderName}: ${m.text}` }],
           }));
 
@@ -242,29 +242,32 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           generatedText = response.text?.trim() || '';
         } else {
           if (persona === 'Friend') {
-            generatedText = 'Hey! Got your message, sounds good!';
+            generatedText = 'Hey! Sun raha hoon bhai, bol!';
           } else if (persona === 'Wife / Partner') {
-            generatedText = 'Haan ji, maine dekh liya! Sab theek hai na?';
+            generatedText = 'Haan bolo ji, main sun rahi hoon!';
           } else if (persona === 'Professional Assistant') {
-            generatedText = 'Understood. I have noted this and will follow up shortly.';
+            generatedText = 'Yes, I am noting this down.';
           } else {
-            generatedText = 'Yo! Got it bro, all good here.';
+            generatedText = 'Haan bhai, bol kya baat hai?';
           }
         }
 
         if (generatedText) {
-          await new Promise((r) => setTimeout(r, 900));
+          await new Promise((r) => setTimeout(r, 800));
 
           const messageId = `msg-ai-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
           const aiMessage: Message = {
             messageId,
-            senderUid: myUid,
+            senderUid: 'ai-partner-uid',
             senderName: myName,
             text: generatedText,
             createdAt: Date.now(),
             isAi: true,
             status: 'delivered',
           };
+
+          // Mark AI message as processed so it never replies to itself
+          processedMessageIdsRef.current.add(messageId);
 
           setMessages((prev) => [...prev, aiMessage]);
 
@@ -283,7 +286,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             try {
               const msgDocRef = doc(db, 'rooms', pin, 'messages', messageId);
               await setDoc(msgDocRef, {
-                senderUid: myUid,
+                senderUid: 'ai-partner-uid',
                 senderName: myName,
                 text: generatedText,
                 createdAt: serverTimestamp(),
@@ -318,8 +321,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
       (snapshot) => {
         if (!snapshot.empty) {
           const remoteMessages: Message[] = [];
-          const newIncomingFromPartner: Message[] = [];
-          const myUid = user.uid || 'current-user-id';
+          const newIncoming: Message[] = [];
 
           snapshot.forEach((docSnap) => {
             const data = docSnap.data();
@@ -338,12 +340,13 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
 
             remoteMessages.push(msg);
 
+            // Shart hatayi gayi: Ab har naye human message par AI reply karega (AI ke khud ke message par nahi)
             if (
               !isFirstSnapshotRef.current &&
               !processedMessageIdsRef.current.has(msgId) &&
-              msg.senderUid !== myUid
+              !msg.isAi
             ) {
-              newIncomingFromPartner.push(msg);
+              newIncoming.push(msg);
             }
 
             processedMessageIdsRef.current.add(msgId);
@@ -358,12 +361,13 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             });
           }
 
+          // Trigger AI Auto-Reply
           if (
             !isFirstSnapshotRef.current &&
             isAutoReplyEnabledRef.current &&
-            newIncomingFromPartner.length > 0
+            newIncoming.length > 0
           ) {
-            const latestIncoming = newIncomingFromPartner[newIncomingFromPartner.length - 1];
+            const latestIncoming = newIncoming[newIncoming.length - 1];
             triggerAiAutoReply(latestIncoming, remoteMessages);
           }
 
@@ -434,26 +438,24 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
 
         if (data.type === 'new_message' && data.message) {
           const incomingMsg: Message = data.message;
-          const myUid = user.uid || 'current-user-id';
 
-          if (incomingMsg.senderUid !== myUid) {
-            setMessages((prev) => {
-              if (prev.some((m) => m.messageId === incomingMsg.messageId)) return prev;
-              const next = [...prev, incomingMsg].sort((a, b) => a.createdAt - b.createdAt);
+          setMessages((prev) => {
+            if (prev.some((m) => m.messageId === incomingMsg.messageId)) return prev;
+            const next = [...prev, incomingMsg].sort((a, b) => a.createdAt - b.createdAt);
 
-              if (
-                isAutoReplyEnabledRef.current &&
-                !processedMessageIdsRef.current.has(incomingMsg.messageId)
-              ) {
-                processedMessageIdsRef.current.add(incomingMsg.messageId);
-                triggerAiAutoReply(incomingMsg, next);
-              }
+            if (
+              isAutoReplyEnabledRef.current &&
+              !processedMessageIdsRef.current.has(incomingMsg.messageId) &&
+              !incomingMsg.isAi
+            ) {
+              processedMessageIdsRef.current.add(incomingMsg.messageId);
+              triggerAiAutoReply(incomingMsg, next);
+            }
 
-              return next;
-            });
+            return next;
+          });
 
-            setPartnerTyping((prev) => ({ ...prev, isTyping: false }));
-          }
+          setPartnerTyping((prev) => ({ ...prev, isTyping: false }));
         }
       };
     } catch (err) {
@@ -513,9 +515,15 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
       status: 'sent',
     };
 
-    processedMessageIdsRef.current.add(messageId);
     setInputText('');
     setMessages((prev) => [...prev, newMessage]);
+
+    // Local trigger for instant self-reply
+    if (isAutoReplyEnabledRef.current) {
+      setTimeout(() => {
+        triggerAiAutoReply(newMessage, [...messages, newMessage]);
+      }, 400);
+    }
 
     if (broadcastChannelRef.current) {
       try {
@@ -758,8 +766,9 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
 
         {messages.map((msg) => {
           const isOutgoing =
-            msg.senderUid === (user.uid || 'current-user-id') ||
-            msg.senderName === (user.displayName || 'Me');
+            !msg.isAi &&
+            (msg.senderUid === (user.uid || 'current-user-id') ||
+              msg.senderName === (user.displayName || 'Me'));
 
           return (
             <div
