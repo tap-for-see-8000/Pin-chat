@@ -48,7 +48,7 @@ export interface LocalAnonymousUser {
 export type AuthSessionUser = User | LocalAnonymousUser;
 
 // Check if a real, valid Firebase API key is provided
-const rawApiKey = (import.meta.env.VITE_FIREBASE_API_KEY || '').trim();
+const rawApiKey = (import.meta.env?.VITE_FIREBASE_API_KEY || '').trim();
 const isRealApiKeyConfigured = Boolean(
   rawApiKey &&
   !rawApiKey.includes('PINCHAT_KPMD_KEY') &&
@@ -60,10 +60,10 @@ const isRealApiKeyConfigured = Boolean(
 export const firebaseConfig = {
   apiKey: isRealApiKeyConfigured ? rawApiKey : "AIzaSy_MOCK_PINCHAT_LOCAL_SESSION_KEY",
   authDomain: "pin-chat-cba45.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "pin-chat-cba45",
+  projectId: import.meta.env?.VITE_FIREBASE_PROJECT_ID || "pin-chat-cba45",
   storageBucket: "pin-chat-cba45.appspot.com",
   messagingSenderId: "570830845597",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:570830845597:web:com.aistudio.pinchat.kpmd",
+  appId: import.meta.env?.VITE_FIREBASE_APP_ID || "1:570830845597:web:com.aistudio.pinchat.kpmd",
 };
 
 // Singleton Firebase App Initialization
