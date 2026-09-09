@@ -1,4 +1,6 @@
-import React, { useEffect, useState } from 'react';
+const fs = require('fs');
+
+const code = `import React, { useEffect, useState } from 'react';
 import { BarChart2, Terminal } from 'lucide-react';
 import { UserRecord, MoodRecord } from '../types';
 import { getWeeklyMoods } from '../services/appService';
@@ -102,8 +104,8 @@ export function WeeklyReportScreen({ currentUser }: WeeklyReportScreenProps) {
               // DOMINANT_STATE
             </h2>
             <div className="flex flex-col items-center justify-center gap-3">
-              <span className={`text-5xl filter ${dominantMood.dropShadow}`}>{dominantMood.emoji}</span>
-              <span className={`text-2xl font-sans font-bold ${dominantMood.text}`}>{dominantMood.title}</span>
+              <span className={\`text-5xl filter \${dominantMood.dropShadow}\`}>{dominantMood.emoji}</span>
+              <span className={\`text-2xl font-sans font-bold \${dominantMood.text}\`}>{dominantMood.title}</span>
             </div>
             {!hasData && (
               <p className="text-xs font-tech text-white/30 mt-2 max-w-sm mx-auto uppercase tracking-widest">// NO_DATA_LOGGED</p>
@@ -124,21 +126,21 @@ export function WeeklyReportScreen({ currentUser }: WeeklyReportScreenProps) {
                <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-white/5 group-hover:bg-white/20 transition-colors" />
                
                <div className="flex items-center gap-5 z-10">
-                 <div className={`text-3xl filter transition-all duration-300 ${stat.count > 0 ? stat.dropShadow : 'grayscale opacity-30 drop-shadow-none'}`}>
+                 <div className={\`text-3xl filter transition-all duration-300 \${stat.count > 0 ? stat.dropShadow : 'grayscale opacity-30 drop-shadow-none'}\`}>
                    {stat.emoji}
                  </div>
                  <div className="flex flex-col">
-                   <span className={`font-sans text-lg font-bold ${stat.count > 0 ? 'text-white' : 'text-white/50'}`}>
+                   <span className={\`font-sans text-lg font-bold \${stat.count > 0 ? 'text-white' : 'text-white/50'}\`}>
                      {stat.label}
                    </span>
                  </div>
                </div>
                
                <div className="flex items-baseline gap-1.5 z-10 text-right">
-                 <span className={`font-display text-2xl font-bold ${stat.count > 0 ? stat.text : 'text-white/20'}`}>
+                 <span className={\`font-display text-2xl font-bold \${stat.count > 0 ? stat.text : 'text-white/20'}\`}>
                    {stat.count}
                  </span>
-                 <span className={`font-tech text-[10px] uppercase tracking-widest ${stat.count > 0 ? 'text-white/60' : 'text-white/20'}`}>
+                 <span className={\`font-tech text-[10px] uppercase tracking-widest \${stat.count > 0 ? 'text-white/60' : 'text-white/20'}\`}>
                    दिन
                  </span>
                </div>
@@ -149,3 +151,6 @@ export function WeeklyReportScreen({ currentUser }: WeeklyReportScreenProps) {
     </div>
   );
 }
+`;
+
+fs.writeFileSync('src/components/WeeklyReportScreen.tsx', code);

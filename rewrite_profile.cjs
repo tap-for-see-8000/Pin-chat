@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+const fs = require('fs');
+const code = `import React, { useState, useEffect } from 'react';
 import { UserRecord } from '../types';
-import { saveGoalProgress, getWeeklyGoalProgress, getFriendCount, getGoalStats } from '../services/appService';
-import { clearCurrentSession, updateUserPresence, updateProfileData, checkUsernameAvailable } from '../userService';
+import { updateUserProfile, saveGoalProgress, getWeeklyGoalProgress, getFriendCount, getGoalStats } from '../services/appService';
+import { clearCurrentSession, updateUserPresence } from '../userService';
 import { LogOut, Edit3, Flame, Users, BookOpen, Target, Activity, Check } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -15,12 +16,6 @@ export function ProfileScreen({ currentUser, onLogout }: ProfileScreenProps) {
   
   // Edit form state
   const [fullName, setFullName] = useState(currentUser.fullName);
-  const [usernameInput, setUsernameInput] = useState(currentUser.username);
-  const [avatarUrl, setAvatarUrl] = useState(currentUser.avatarUrl || '');
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const [isProcessingImage, setIsProcessingImage] = useState(false);
-  const [usernameError, setUsernameError] = useState('');
-  const [usernameSuccess, setUsernameSuccess] = useState(false);
   const [bio, setBio] = useState(currentUser.bio || '');
   const [personalGoal, setPersonalGoal] = useState(currentUser.personalGoal || '');
   const [saving, setSaving] = useState(false);
@@ -38,44 +33,6 @@ export function ProfileScreen({ currentUser, onLogout }: ProfileScreenProps) {
     return d.toISOString().split('T')[0];
   });
 
-  
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
-    setIsProcessingImage(true);
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const img = new Image();
-      img.onload = () => {
-        // Create canvas to crop and resize
-        const canvas = document.createElement('canvas');
-        const size = 300; // max size 300x300
-        canvas.width = size;
-        canvas.height = size;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          // Calculate crop
-          const minDim = Math.min(img.width, img.height);
-          const sx = (img.width - minDim) / 2;
-          const sy = (img.height - minDim) / 2;
-          
-          ctx.drawImage(img, sx, sy, minDim, minDim, 0, 0, size, size);
-          // Get base64 jpeg
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-          setAvatarUrl(dataUrl);
-        }
-        setIsProcessingImage(false);
-      };
-      img.onerror = () => setIsProcessingImage(false);
-      if (typeof event.target?.result === 'string') {
-        img.src = event.target.result;
-      }
-    };
-    reader.onerror = () => setIsProcessingImage(false);
-    reader.readAsDataURL(file);
-  };
-  
   const loadData = async () => {
     const [progress, count, stats] = await Promise.all([
       getWeeklyGoalProgress(currentUser.username, dates),
@@ -94,11 +51,10 @@ export function ProfileScreen({ currentUser, onLogout }: ProfileScreenProps) {
 
   const handleSaveProfile = async () => {
     setSaving(true);
-    await updateProfileData(currentUser.username, { 
+    await updateUserProfile(currentUser.username, { 
       fullName, 
       bio, 
       personalGoal,
-      avatarUrl,
       streak, // Update current streak on user record so friends can see
       thirtyDayProgress: thirtyDayCount
     });
@@ -166,65 +122,21 @@ export function ProfileScreen({ currentUser, onLogout }: ProfileScreenProps) {
           <div className="absolute top-0 right-0 w-32 h-32 bg-[#AFDDFF]/10 rounded-full blur-[40px] pointer-events-none -mr-10 -mt-10" />
           
           <div className="w-20 h-20 rounded-full border-2 border-[#AFDDFF]/30 bg-black flex items-center justify-center overflow-hidden shrink-0 shadow-[0_0_15px_rgba(175,221,255,0.1)]">
-            {(isEditing ? avatarUrl : currentUser.avatarUrl) ? (
-              <img src={(isEditing ? avatarUrl : currentUser.avatarUrl)!} alt="Avatar" className="w-full h-full object-cover" />
+            {currentUser.avatarUrl ? (
+              <img src={currentUser.avatarUrl} alt="Avatar" className="w-full h-full object-cover filter grayscale" />
             ) : (
-              <span className="text-2xl font-tech text-white/50">{(isEditing ? fullName : currentUser.fullName).charAt(0).toUpperCase()}</span>
+              <span className="text-2xl font-tech text-white/50">{currentUser.fullName.charAt(0).toUpperCase()}</span>
             )}
           </div>
           
           <div className="flex-1 min-w-0">
             {isEditing ? (
-              <>
-                <div className="mb-3">
-                  <div className="flex items-center gap-3">
-                    <button 
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={isProcessingImage}
-                      className="px-3 py-1.5 bg-[#AFDDFF]/20 text-[#AFDDFF] rounded text-[10px] font-tech uppercase tracking-wider hover:bg-[#AFDDFF]/30 transition-colors border border-[#AFDDFF]/30"
-                    >
-                      {isProcessingImage ? 'PROCESSING...' : (avatarUrl ? 'CHANGE PHOTO' : 'ADD PHOTO')}
-                    </button>
-                    {avatarUrl !== currentUser.avatarUrl && avatarUrl && (
-                       <button 
-                         onClick={() => setAvatarUrl(currentUser.avatarUrl || '')}
-                         className="text-white/50 hover:text-white text-[10px] uppercase font-tech transition-colors"
-                       >
-                         CANCEL
-                       </button>
-                    )}
-                  </div>
-                  <input 
-                    type="file" 
-                    ref={fileInputRef} 
-                    accept="image/*" 
-                    onChange={handleFileChange} 
-                    className="hidden" 
-                  />
-                </div>
-                <input 
-                  type="text" 
-                  value={fullName}
-                  onChange={e => setFullName(e.target.value)}
-                  placeholder="Full Name"
-                  className="w-full bg-black/40 border border-[#AFDDFF]/50 rounded px-2 py-1 text-white font-display font-bold text-xl uppercase mb-1 focus:outline-none"
-                />
-                <div>
-                  <input 
-                    type="text" 
-                    value={usernameInput}
-                    onChange={e => {
-                      setUsernameInput(e.target.value);
-                      setUsernameError('');
-                      setUsernameSuccess(false);
-                    }}
-                    placeholder="Username"
-                    className="w-full bg-black/40 border border-[#AFDDFF]/50 rounded px-2 py-1 text-white text-xs focus:outline-none lowercase"
-                  />
-                  {usernameError && <div className="text-[10px] text-rose-500 mt-1">{usernameError}</div>}
-                  {usernameSuccess && <div className="text-[10px] text-emerald-500 mt-1">Username available ✓</div>}
-                </div>
-              </>
+              <input 
+                type="text" 
+                value={fullName}
+                onChange={e => setFullName(e.target.value)}
+                className="w-full bg-black/40 border border-[#AFDDFF]/50 rounded px-2 py-1 text-white font-display font-bold text-xl uppercase mb-1 focus:outline-none"
+              />
             ) : (
               <h2 className="text-xl font-display font-bold text-white uppercase tracking-wide truncate">{currentUser.fullName}</h2>
             )}
@@ -308,13 +220,13 @@ export function ProfileScreen({ currentUser, onLogout }: ProfileScreenProps) {
                     <button
                       onClick={() => toggleGoalProgress(dateStr)}
                       disabled={isFuture}
-                      className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 relative ${
+                      className={\`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-300 relative \${
                         isCompleted 
                           ? 'bg-black border border-[#00E5FF] shadow-[inset_0_0_15px_rgba(0,229,255,0.4),0_0_10px_rgba(0,229,255,0.2)]' 
                           : isFuture
                           ? 'bg-white/5 border border-white/5 opacity-30 cursor-not-allowed'
                           : 'bg-black border border-white/20 hover:border-white/40'
-                      }`}
+                      }\`}
                     >
                       {isCompleted && (
                         <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-4 h-4 rounded-full bg-[#00E5FF] shadow-[0_0_10px_#00E5FF]" />
@@ -344,3 +256,5 @@ export function ProfileScreen({ currentUser, onLogout }: ProfileScreenProps) {
     </div>
   );
 }
+`;
+fs.writeFileSync('src/components/ProfileScreen.tsx', code);

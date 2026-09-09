@@ -13,11 +13,15 @@ export interface UserRecord {
   avatarUrl: string;
   aboutMe?: string;
   personalGoal?: string;
+  bio?: string;
+  goalHistory?: { [date: string]: boolean };
+  streak?: number;
+  thirtyDayProgress?: number;
   createdAt: number;
   updatedAt: number;
 }
 
-export type AppScreen = 'auth' | 'inbox' | 'chat' | 'mood' | 'weekly_report' | 'profile';
+export type AppScreen = 'auth' | 'inbox' | 'chat' | 'chat_profile' | 'mood' | 'weekly_report' | 'profile' | 'notifications';
 
 export type MoodType = 'happy' | 'sad' | 'low' | 'angry' | 'missing anyone';
 
@@ -29,14 +33,14 @@ export interface MoodRecord {
   timestamp: number;
 }
 
-export type NotificationType = 'friend_request';
+export type NotificationType = 'friend_added' | 'new_message';
 
 export interface AppNotification {
   id: string;
   receiverUsername: string;
   senderUsername: string;
   type: NotificationType;
-  relatedRequestId: string;
+  relatedRequestId?: string;
   isRead: boolean;
   handled: boolean;
   timestamp: number;
@@ -84,6 +88,11 @@ export interface PublicUserProfile {
   gender?: 'male' | 'female';
   avatarUrl?: string;
   presence?: UserPresence;
+  bio?: string;
+  personalGoal?: string;
+  streak?: number;
+  thirtyDayProgress?: number;
+  friendCount?: number;
   createdAt?: number;
 }
 
@@ -297,4 +306,14 @@ export interface DecoyMessage {
   time: string;
   isUser?: boolean;
   badge?: string;
+}
+
+export interface SecretCapsule {
+  id: string;
+  senderUsername: string;
+  receiverUsername: string;
+  message: string;
+  unlockTime: number;
+  createdAt: number;
+  isUnlocked: boolean;
 }

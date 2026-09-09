@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from 'react';
+const fs = require('fs');
+
+const code = `import React, { useState, useEffect } from 'react';
 import { Sparkles, Bell, Terminal } from 'lucide-react';
 import { UserRecord, MoodType } from '../types';
 import { saveMood } from '../services/appService';
@@ -100,11 +102,11 @@ export function MoodTrackerUI({ currentUser, onNavigate }: MoodTrackerUIProps) {
             <button
               key={mood.id}
               onClick={() => handleMoodSelect(mood.id as MoodType)}
-              className={`relative w-full p-5 rounded-xl text-left overflow-hidden transition-all duration-300 ${
+              className={\`relative w-full p-5 rounded-xl text-left overflow-hidden transition-all duration-300 \${
                 isSelected 
-                  ? `bg-white/10 ${mood.border} ${mood.glowSelect} -translate-y-1`
-                  : `glass-panel hover:bg-white/5 border-white/5`
-              }`}
+                  ? \`bg-white/10 \${mood.border} \${mood.glowSelect} -translate-y-1\`
+                  : \`glass-panel hover:bg-white/5 border-white/5\`
+              }\`}
             >
               {/* Corner Bracket Details */}
               <div className="absolute top-1 left-1 w-2 h-2 border-t border-l border-white/20"></div>
@@ -112,24 +114,24 @@ export function MoodTrackerUI({ currentUser, onNavigate }: MoodTrackerUIProps) {
 
               <div className="relative z-10 flex items-center justify-between">
                 <div className="flex items-center gap-5">
-                  <div className={`w-12 h-12 flex items-center justify-center text-3xl filter transition-all duration-300 ${isSelected ? mood.dropShadow + ' scale-110' : 'drop-shadow-[0_0_5px_rgba(255,255,255,0.2)] grayscale-[0.2]'}`}>
+                  <div className={\`w-12 h-12 flex items-center justify-center text-3xl filter transition-all duration-300 \${isSelected ? mood.dropShadow + ' scale-110' : 'drop-shadow-[0_0_5px_rgba(255,255,255,0.2)] grayscale-[0.2]'}\`}>
                     {mood.emoji}
                   </div>
                   <div className="flex flex-col">
                     <div className="font-tech text-[9px] text-white/30 uppercase tracking-[0.2em] mb-1">
                       // {mood.label}
                     </div>
-                    <h3 className={`font-sans text-xl font-bold tracking-wide transition-colors ${isSelected ? 'text-white' : 'text-white/80'}`}>
+                    <h3 className={\`font-sans text-xl font-bold tracking-wide transition-colors \${isSelected ? 'text-white' : 'text-white/80'}\`}>
                       {mood.title}
                     </h3>
                   </div>
                 </div>
                 {isSelected && (
                   <div className="flex flex-col items-end">
-                    <span className={`font-tech text-[8px] uppercase tracking-widest ${mood.text} mb-1`}>
+                    <span className={\`font-tech text-[8px] uppercase tracking-widest \${mood.text} mb-1\`}>
                       MOOD_ACTIVE
                     </span>
-                    <div className={`w-2 h-2 rounded-full ${mood.text.replace('text-', 'bg-')} shadow-[0_0_10px_currentColor] animate-pulse`} />
+                    <div className={\`w-2 h-2 rounded-full \${mood.text.replace('text-', 'bg-')} shadow-[0_0_10px_currentColor] animate-pulse\`} />
                   </div>
                 )}
               </div>
@@ -140,3 +142,6 @@ export function MoodTrackerUI({ currentUser, onNavigate }: MoodTrackerUIProps) {
     </div>
   );
 }
+`;
+
+fs.writeFileSync('src/components/MoodTrackerUI.tsx', code);

@@ -1,15 +1,11 @@
-import React, { useState, useEffect } from 'react';
+const fs = require('fs');
+
+const code = `import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Search, MessageSquare, AlertCircle, Loader2, Shield, Plus, X } from 'lucide-react';
 import { UserRecord, PublicUserProfile, ChatConversation } from '../types';
 import { searchUserByUsername, getSavedConversations, saveConversationItem, getChatId } from '../userService';
-import { db } from '../firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { EmojiGatewayModal } from './EmojiGatewayModal';
-import { NotificationsScreen } from './NotificationsScreen';
-import { Bell } from 'lucide-react';
-import { ChatProfilePanel } from './ChatProfilePanel';
-import { checkIsFriend, addFriend, createNotification } from '../services/appService';
 
 interface InboxScreenProps {
   currentUser: UserRecord;
@@ -26,13 +22,8 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [foundUser, setFoundUser] = useState<PublicUserProfile | null>(null);
-  const [isFoundUserFriend, setIsFoundUserFriend] = useState(false);
-  const [viewingProfileOf, setViewingProfileOf] = useState<PublicUserProfile | null>(null);
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
 
-  const [unreadUsers, setUnreadUsers] = useState<Set<string>>(new Set());
-  const [hasUnreadNotifs, setHasUnreadNotifs] = useState(false);
-  const [showNotifs, setShowNotifs] = useState(false);
   const [conversations, setConversations] = useState<ChatConversation[]>(() =>
     getSavedConversations(currentUser.username)
   );
@@ -42,28 +33,6 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
     chatId: string;
   } | null>(null);
 
-  
-  useEffect(() => {
-    // Listen for unread messages via notifications
-    if (!db) return;
-    
-    const q = query(
-      collection(db, 'notifications'), 
-      where('receiverUsername', '==', currentUser.username),
-      where('type', '==', 'new_message'),
-      where('handled', '==', false)
-    );
-    const unsub = onSnapshot(q, (snap) => {
-      const senders = new Set<string>();
-      snap.docs.forEach(d => {
-        senders.add(d.data().senderUsername);
-      });
-      setUnreadUsers(senders);
-      setHasUnreadNotifs(snap.docs.length > 0);
-    });
-    return () => unsub();
-  }, [currentUser.username]);
-  
   const handleSearchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -78,7 +47,6 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
         setSearchError('IDENTIFIER NOT FOUND');
       } else {
         setFoundUser(result.user);
-        checkIsFriend(currentUser.username, result.user.username).then(setIsFoundUserFriend);
       }
     } catch (err) {
       setSearchError('CONNECTION FAILED');
@@ -163,16 +131,13 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
                   <div className="flex items-center gap-4 min-w-0 flex-1 z-10">
                     <div className="w-12 h-12 rounded-full bg-black border border-white/10 flex items-center justify-center text-white/50 font-tech text-lg shrink-0 group-hover:border-[#AFDDFF]/50 transition-colors">
                       {conv.otherUser.avatarUrl ? (
-                        <img src={conv.otherUser.avatarUrl} alt={conv.otherUser.fullName} className="w-full h-full rounded-full object-cover transition-all" />
+                        <img src={conv.otherUser.avatarUrl} alt={conv.otherUser.fullName} className="w-full h-full rounded-full object-cover filter grayscale group-hover:grayscale-0 transition-all" />
                       ) : conv.otherUser.fullName.charAt(0).toUpperCase()}
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-sm font-display font-bold truncate uppercase group-hover:text-[#AFDDFF] transition-colors">
-                          {conv.otherUser.fullName} {(conv.unread || unreadUsers.has(conv.otherUser.username)) && <div className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />}
-                        </span>
-                        <span className="text-[10px] text-[#AFDDFF]/70 font-mono shrink-0">
-                          {new Date(conv.lastMessageTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {conv.otherUser.fullName}
                         </span>
                         <span className="text-[9px] font-tech text-white/40 shrink-0 uppercase tracking-widest">
                           {formatRelativeTime(conv.lastMessageTime)}
@@ -299,7 +264,7 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
                     <div className="flex items-center gap-4 min-w-0 z-10">
                       <div className="w-14 h-14 rounded-full bg-black border border-[#AFDDFF]/30 flex items-center justify-center text-white/60 font-tech text-xl shrink-0 overflow-hidden shadow-[0_0_15px_rgba(175,221,255,0.1)]">
                         {foundUser.avatarUrl ? (
-                          <img src={foundUser.avatarUrl} alt={foundUser.fullName} className="w-full h-full object-cover" />
+                          <img src={foundUser.avatarUrl} alt={foundUser.fullName} className="w-full h-full object-cover filter grayscale" />
                         ) : foundUser.fullName.charAt(0).toUpperCase()}
                       </div>
                       <div className="min-w-0 flex-1">
@@ -322,32 +287,6 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
         )}
       </AnimatePresence>
 
-      {/* Notifications Overlay */}
-      <AnimatePresence>
-        {showNotifs && (
-          <motion.div initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }} className="absolute inset-0 z-50 bg-[#000000]">
-            <NotificationsScreen currentUser={currentUser} onBack={() => setShowNotifs(false)} />
-          </motion.div>
-        )}
-      </AnimatePresence>
-      {/* Search Profile Panel Overlay */}
-      <AnimatePresence>
-        {viewingProfileOf && (
-          <ChatProfilePanel 
-            targetUser={viewingProfileOf} 
-            currentUser={currentUser} 
-            onClose={() => setViewingProfileOf(null)} 
-            onStartChat={() => handleInitiateChat(viewingProfileOf)}
-            isFriend={isFoundUserFriend}
-            onAddFriend={async () => {
-              if (viewingProfileOf.username === currentUser.username) return;
-              await addFriend(currentUser.username, viewingProfileOf.username);
-              await createNotification(viewingProfileOf.username, currentUser.username, 'friend_added');
-              setIsFoundUserFriend(true);
-            }}
-          />
-        )}
-      </AnimatePresence>
       {/* Secret Emoji Gateway Interstitial Modal */}
       {pendingChat && (
         <EmojiGatewayModal
@@ -362,3 +301,6 @@ export const InboxScreen: React.FC<InboxScreenProps> = ({
     </div>
   );
 };
+`;
+
+fs.writeFileSync('src/components/InboxScreen.tsx', code);

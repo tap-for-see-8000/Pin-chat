@@ -71,52 +71,11 @@ export async function checkIsFriend(userA: string, userB: string): Promise<boole
   return snap.exists() && snap.data().status === 'active';
 }
 
-export async function sendFriendRequest(sender: string, receiver: string): Promise<void> {
-  const id = `${sender}_${receiver}`;
-  
-  // 1. Check if friendship already exists
-  const [u1, u2] = [sender, receiver].sort();
-  const friendshipId = `${u1}_${u2}`;
-  const friendshipSnap = await getDoc(doc(db, 'friends', friendshipId));
-  if (friendshipSnap.exists()) return; // Already friends
-  
-  // 2. Check if a request already exists
-  const reqSnap = await getDoc(doc(db, 'friendRequests', id));
-  if (reqSnap.exists() && reqSnap.data().status === 'pending') return; // Already pending
 
-  const docRef = doc(db, 'friendRequests', id);
-  await setDoc(docRef, {
-    senderUsername: sender,
-    receiverUsername: receiver,
-    status: 'pending',
-    timestamp: Date.now()
-  });
 
-  // 3. Create Notification
-  const notifId = `notif_${id}`;
-  await setDoc(doc(db, 'notifications', notifId), {
-    id: notifId,
-    receiverUsername: receiver,
-    senderUsername: sender,
-    type: 'friend_request',
-    relatedRequestId: id,
-    isRead: false,
-    handled: false,
-    timestamp: Date.now()
-  });
-}
 
-export async function getPendingFriendRequests(username: string): Promise<FriendRequest[]> {
-  const q = query(collection(db, 'friendRequests'), where('receiverUsername', '==', username), where('status', '==', 'pending'));
-  const snap = await getDocs(q);
-  return snap.docs.map(d => ({ id: d.id, ...d.data() } as FriendRequest));
-}
-
-export async function acceptFriendRequest(requestId: string, sender: string, receiver: string): Promise<void> {
-  const reqRef = doc(db, 'friendRequests', requestId);
-  await updateDoc(reqRef, { status: 'accepted' });
-  
-  const [u1, u2] = [sender, receiver].sort();
+export async function addFriend(userA: string, userB: string): Promise<void> {
+  const [u1, u2] = [userA, userB].sort();
   const friendshipId = `${u1}_${u2}`;
   const friendRef = doc(db, 'friends', friendshipId);
   await setDoc(friendRef, {
@@ -125,48 +84,64 @@ export async function acceptFriendRequest(requestId: string, sender: string, rec
     status: 'active',
     timestamp: Date.now()
   });
-  
-  // Update Notification
-  const notifId = `notif_${requestId}`;
-  const notifRef = doc(db, 'notifications', notifId);
-  const notifSnap = await getDoc(notifRef);
-  if (notifSnap.exists()) {
-    await updateDoc(notifRef, { handled: true, isRead: true });
-  }
+
+  // Create notification for userB if userA adds them, and vice-versa?
+  // We'll create it for both or just the one who was added?
+  // Let's create an exported notify function to call explicitly.
 }
 
-export async function rejectFriendRequest(requestId: string): Promise<void> {
-  const reqRef = doc(db, 'friendRequests', requestId);
-  await updateDoc(reqRef, { status: 'declined' });
-  
-  // Update Notification
-  const notifId = `notif_${requestId}`;
-  const notifRef = doc(db, 'notifications', notifId);
-  const notifSnap = await getDoc(notifRef);
-  if (notifSnap.exists()) {
-    await updateDoc(notifRef, { handled: true, isRead: true });
-  }
-}
-
-export async function getMessageCount(chatId: string): Promise<number> {
-  // To enforce the 10-message limit, we need to know the number of messages in the chat
-  // Note: getting all docs just to count is expensive, but for a 10-message limit it's okay.
-  const q = query(collection(db, 'chats', chatId, 'messages'), limit(15));
-  const snap = await getDocs(q);
-  return snap.size;
-}
-
-// -- GOALS --
-
-export async function saveGoalProgress(username: string, date: string, completed: boolean): Promise<void> {
-  const id = `${username}_${date}`;
-  const docRef = doc(db, 'goalProgress', id);
-  await setDoc(docRef, {
-    username,
-    date,
-    completed,
+export async function createNotification(receiver: string, sender: string, type: 'friend_added' | 'new_message'): Promise<void> {
+  const notifId = `notif_${type}_${sender}_${Date.now()}`;
+  await setDoc(doc(db, 'notifications', notifId), {
+    id: notifId,
+    receiverUsername: receiver,
+    senderUsername: sender,
+    type: type,
+    isRead: false,
+    handled: false,
     timestamp: Date.now()
   });
+}
+
+export async function getGoalStats(username: string): Promise<{ streak: number, thirtyDayCount: number }> {
+  // We'll calculate streak and 30-day progress by fetching the last 30 days of goalProgress
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const dates = Array.from({ length: 30 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() - (29 - i));
+    return d.toISOString().split('T')[0];
+  });
+  
+  const progress = await getWeeklyGoalProgress(username, dates);
+  
+  let thirtyDayCount = 0;
+  let streak = 0;
+  
+  // Count 30 days
+  for (const date of dates) {
+    if (progress[date]) {
+      thirtyDayCount++;
+    }
+  }
+  
+  // Calculate current streak (working backwards from today)
+  for (let i = dates.length - 1; i >= 0; i--) {
+    const date = dates[i];
+    if (progress[date]) {
+      streak++;
+    } else {
+      // If today is missing, it's okay, maybe they haven't done it today yet, but if yesterday is missing, streak is 0.
+      if (i === dates.length - 1) {
+         // Today is missing, let's check yesterday
+         continue;
+      } else {
+         break;
+      }
+    }
+  }
+  
+  return { streak, thirtyDayCount };
 }
 
 export async function getWeeklyGoalProgress(username: string, dates: string[]): Promise<Record<string, boolean>> {
@@ -184,24 +159,26 @@ export async function getWeeklyGoalProgress(username: string, dates: string[]): 
   return result;
 }
 
-export async function updateUserProfile(username: string, data: Partial<UserRecord>): Promise<void> {
-  const docRef = doc(db, 'users', username);
-  await updateDoc(docRef, {
-    ...data,
-    updatedAt: Date.now()
+export async function saveGoalProgress(username: string, date: string, completed: boolean): Promise<void> {
+  const id = `${username}_${date}`;
+  const docRef = doc(db, 'goalProgress', id);
+  await setDoc(docRef, {
+    username,
+    date,
+    completed,
+    timestamp: Date.now()
   });
 }
 
 export async function getNotifications(username: string): Promise<AppNotification[]> {
+  
   const q = query(collection(db, 'notifications'), where('receiverUsername', '==', username), where('handled', '==', false));
   const snap = await getDocs(q);
   return snap.docs.map(d => d.data() as AppNotification).sort((a, b) => b.timestamp - a.timestamp);
 }
 
-export async function getPendingFriendRequestById(requestId: string): Promise<FriendRequest | null> {
-  const snap = await getDoc(doc(db, 'friendRequests', requestId));
-  if (snap.exists()) {
-    return snap.data() as FriendRequest;
-  }
-  return null;
+export async function markNotificationAsHandled(notifId: string): Promise<void> {
+  
+  const notifRef = doc(db, 'notifications', notifId);
+  await updateDoc(notifRef, { handled: true, isRead: true });
 }

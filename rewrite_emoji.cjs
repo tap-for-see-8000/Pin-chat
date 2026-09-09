@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+const fs = require('fs');
+const code = `import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence, useAnimation } from 'motion/react';
 import { Shield, Lock, X } from 'lucide-react';
 import { PublicUserProfile } from '../types';
@@ -36,7 +37,7 @@ export const EmojiGatewayModal: React.FC<EmojiGatewayModalProps> = ({
         triggerVerification(true);
       }
     } else {
-      // Horizontal drag={!isVerifying}
+      // Horizontal drag
       if (Math.abs(offset.x) > threshold) {
         // Dragged towards the other emoji or side -> FAKE CHAT
         triggerVerification(true);
@@ -102,17 +103,11 @@ export const EmojiGatewayModal: React.FC<EmojiGatewayModalProps> = ({
           <div className="flex items-center justify-center gap-12 w-full z-20 h-40 relative">
             
             {/* Downward Trail Indicator (Static background hint) */}
-            <div className="absolute left-1/2 top-full -translate-x-1/2 -mt-4 flex flex-col items-center pointer-events-none opacity-40">
-              <div className="w-0.5 h-12 bg-gradient-to-b from-[#AFDDFF]/40 to-transparent"></div>
-              <div className="mt-2 text-[8px] font-tech text-[#AFDDFF] uppercase tracking-[0.3em] rotate-90 origin-left ml-6 whitespace-nowrap">
-                DRAG DOWN TO DECRYPT
-              </div>
-            </div>
             <div className="absolute left-1/2 top-full -translate-x-1/2 -mt-10 h-24 w-1 bg-gradient-to-b from-transparent via-[#AFDDFF]/10 to-transparent pointer-events-none" />
 
             {/* Emoji 1: Smiling Face */}
             <motion.div
-              drag={!isVerifying}
+              drag
               dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
               dragElastic={0.8}
               onDragEnd={(e, info) => handleDragEnd(e, info, 'smile')}
@@ -128,7 +123,7 @@ export const EmojiGatewayModal: React.FC<EmojiGatewayModalProps> = ({
 
             {/* Emoji 2: Mask/Mysterious */}
             <motion.div
-              drag={!isVerifying}
+              drag
               dragConstraints={{ left: 0, right: 0, top: 0, bottom: 0 }}
               dragElastic={0.8}
               onDragEnd={(e, info) => handleDragEnd(e, info, 'mask')}
@@ -154,3 +149,5 @@ export const EmojiGatewayModal: React.FC<EmojiGatewayModalProps> = ({
     </AnimatePresence>
   );
 };
+`;
+fs.writeFileSync('src/components/EmojiGatewayModal.tsx', code);

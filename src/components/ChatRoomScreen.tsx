@@ -25,6 +25,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft,
   Send,
@@ -68,6 +69,7 @@ import {
   stopLocationSharing,
 } from '../userService';
 import { LiveLocationRadar } from './LiveLocationRadar';
+import { ChatProfilePanel } from './ChatProfilePanel';
 import { db } from '../firebase';
 import {
   collection,
@@ -88,10 +90,6 @@ import {
 } from '../services/aiAutoReplyEngine';
 import { 
   checkIsFriend, 
-  sendFriendRequest, 
-  getPendingFriendRequests, 
-  acceptFriendRequest, 
-  rejectFriendRequest,
   getWeeklyGoalProgress
 } from '../services/appService';
 import { AutoReplyStyle } from '../types';
@@ -101,6 +99,7 @@ interface ChatRoomScreenProps {
   currentUser: UserRecord;
   targetUser: PublicUserProfile;
   onBack: () => void;
+  onOpenProfile?: () => void;
 }
 
 const STYLE_OPTIONS: { id: AutoReplyStyle; label: string }[] = [
@@ -115,8 +114,10 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   currentUser,
   targetUser,
   onBack,
+  onOpenProfile,
 }) => {
   const [inputText, setInputText] = useState('');
+  
   const [micActive, setMicActive] = useState(false);
   const [micNotice, setMicNotice] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -138,9 +139,10 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
 
   // Friendship State
   const [isFriend, setIsFriend] = useState<boolean>(true); // assume true while loading
-  const [pendingFriendRequest, setPendingFriendRequest] = useState<any>(null);
+  
   const [showProfileModal, setShowProfileModal] = useState<boolean>(false);
   const [targetUserGoal, setTargetUserGoal] = useState<any>(null);
+  const [liveTargetUser, setLiveTargetUser] = useState<PublicUserProfile>(targetUser);
 
   // Synchronized refs for listeners
   const isAutoReplyEnabledRef = useRef(isAutoReplyEnabled);
@@ -171,18 +173,14 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
       setIsFriend(friendStatus);
 
       // Check if there is a pending request to us from them
-      const requests = await getPendingFriendRequests(currentUser.username);
-      const req = requests.find(r => r.senderUsername === targetUser.username);
-      if (req) {
-        setPendingFriendRequest(req);
-      }
+      
+      
+      
 
       // Check for outgoing request
-      const outRequests = await getPendingFriendRequests(targetUser.username);
-      const outReq = outRequests.find(r => r.senderUsername === currentUser.username);
-      if (outReq) {
-        setPendingFriendRequest(outReq); // We will use status to show "Pending..."
-      }
+      
+      
+      
 
       // Fetch target user's profile to get goal
       try {
@@ -641,11 +639,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     const cleanText = inputText.trim();
     if (!cleanText) return;
 
-    if (!isFriend && messages.length >= 10) {
-      setToastNotice("Message limit reached. Send a friend request to continue chatting.");
-      setTimeout(() => setToastNotice(null), 4000);
-      return;
-    }
+
 
     const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const now = Date.now();
@@ -858,177 +852,66 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   return (
     <div
       id="chatroom-screen"
-      className="w-full h-screen bg-[#07090e] text-slate-100 flex flex-col justify-between select-none relative overflow-hidden"
+      className="w-full h-[100dvh] bg-transparent text-slate-800 flex flex-col justify-between select-none relative overflow-hidden"
     >
       {/* 1. Chat Header */}
       <header
         id="chatHeader"
-        className="w-full px-3 sm:px-4 py-2.5 bg-[#0f121a]/95 backdrop-blur-xl border-b border-white/10 flex flex-wrap items-center justify-between gap-2 z-20 shrink-0 shadow-lg"
+        className="w-full px-4 py-3 glass-panel border-b-0 border-x-0 border-t-0 rounded-none flex flex-wrap items-center justify-between gap-2 z-20 shrink-0"
       >
-        {/* Left: Back button & Target User Profile with Real-time Presence */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-3">
           <button
             id="chatBackBtn"
             onClick={onBack}
-            className="p-2 rounded-xl text-slate-300 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer active:scale-95"
-            title="Back to Inbox"
+            className="p-2 rounded-md glass-panel-heavy text-white/60 hover:text-white transition-colors active:scale-95 flex items-center justify-center"
+            title="Disconnect"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-
-          <div className="flex items-center gap-2.5">
-            {/* Circular Partner Avatar with Real-time Presence / Typing Badge */}
+          
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => onOpenProfile?.()}>
             <div className="relative shrink-0">
-              <div className="w-10 h-10 rounded-full p-0.5 bg-gradient-to-tr from-amber-500/60 to-amber-600/60 border border-amber-500/40 overflow-hidden flex items-center justify-center bg-[#161b26] shadow-md">
+              <div className="w-10 h-10 rounded-full border border-white/20 bg-black flex items-center justify-center overflow-hidden">
                 {targetUser.avatarUrl ? (
                   <img
                     src={targetUser.avatarUrl}
                     alt={targetUser.fullName}
-                    referrerPolicy="no-referrer"
-                    className="w-full h-full rounded-full object-cover"
+                    className="w-full h-full object-cover"
                   />
                 ) : (
-                  <span className="text-amber-300 font-bold text-sm">
+                  <span className="text-white/60 font-tech text-sm">
                     {targetUser.fullName.charAt(0).toUpperCase()}
                   </span>
                 )}
               </div>
-              {/* Presence / Typing Indicator Dot */}
               <span
-                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-[#0f121a] ${
+                className={`absolute bottom-0 right-0 w-3 h-3 rounded-full border-2 border-black ${
                   partnerTyping.isTyping
-                    ? 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.9)] animate-ping'
+                    ? 'bg-[#AFDDFF] shadow-[0_0_8px_#AFDDFF] animate-pulse'
                     : partnerPresence.isOnline
-                    ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse'
-                    : 'bg-slate-500'
+                    ? 'bg-[#AFDDFF] shadow-[0_0_8px_#AFDDFF]'
+                    : 'bg-white/20'
                 }`}
-                title={
-                  partnerTyping.isTyping
-                    ? 'Typing...'
-                    : partnerPresence.isOnline
-                    ? 'Online'
-                    : 'Offline'
-                }
               />
             </div>
-
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs sm:text-sm font-bold text-white leading-tight truncate max-w-[150px] sm:max-w-[200px]">
-                  {targetUser.fullName}
-                </span>
-
-                {partnerTyping.isTyping && (
-                  <span className="text-[10px] font-mono text-amber-300 font-medium px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/30 animate-pulse">
-                    typing...
-                  </span>
-                )}
-              </div>
-
-              {/* Status text: "Online" OR "Last seen [X] mins ago" */}
-              <div className="flex items-center gap-1.5 text-[11px] font-mono leading-tight">
-                <span className="text-amber-400/90">@{targetUser.username}</span>
-                <span className="text-slate-500">•</span>
-                {partnerTyping.isTyping ? (
-                  <span className="text-amber-300 font-semibold animate-pulse">
-                    typing...
-                  </span>
-                ) : partnerPresence.isOnline ? (
-                  <span className="text-emerald-400 font-semibold">
-                    Online
-                  </span>
-                ) : (
-                  <span className="text-slate-400">
-                    Last seen {formatLastSeen(partnerPresence.lastSeen)}
-                  </span>
-                )}
-              </div>
+            <div className="flex flex-col">
+              <span className="text-sm font-display font-bold text-white tracking-widest uppercase">
+                {targetUser.fullName}
+              </span>
+              <span className={`text-[9px] font-tech uppercase tracking-widest ${partnerPresence.isOnline ? 'text-[#AFDDFF]' : 'text-white/40'}`}>
+                {partnerTyping.isTyping ? 'Transmitting...' : partnerPresence.isOnline ? 'Active Connection' : partnerPresence.lastSeen ? 'Offline' : 'Unknown'}
+              </span>
             </div>
           </div>
         </div>
 
-        {/* Right: Stealth Gemini AI Auto-Reply Controls */}
-        <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
-          {/* Conversation Style Selector Dropdown */}
-          <div className="flex items-center gap-1.5 bg-[#161b26] border border-white/10 px-2.5 py-1.5 rounded-xl text-xs">
-            <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <select
-              id="conversationStyleDropdown"
-              value={autoReplyStyle}
-              onChange={(e) => handleChangeStyle(e.target.value as AutoReplyStyle)}
-              className="bg-transparent text-amber-300 text-xs font-medium focus:outline-none cursor-pointer pr-1"
-              title="Select Conversation Style"
-            >
-              {STYLE_OPTIONS.map((styleOpt) => (
-                <option
-                  key={styleOpt.id}
-                  value={styleOpt.id}
-                  className="bg-[#161b26] text-slate-200"
-                >
-                  {styleOpt.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* AI Auto-Reply Toggle (Default ON) */}
-          <button
-            id="aiAutoReplyToggleBtn"
-            type="button"
-            onClick={handleToggleAutoReply}
-            className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer shadow-sm active:scale-95 ${
-              isAutoReplyEnabled
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
-                : 'bg-white/[0.04] border-white/10 text-slate-400 hover:text-slate-200'
-            }`}
-            title="Toggle Stealth AI Auto-Reply"
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                isAutoReplyEnabled
-                  ? 'bg-emerald-400 animate-pulse shadow-[0_0_6px_rgba(52,211,153,0.9)]'
-                  : 'bg-slate-500'
-              }`}
-            />
-            <span className="hidden xs:inline text-[11px]">Auto-Reply:</span>
-            <span
-              className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                isAutoReplyEnabled
-                  ? 'bg-emerald-400 text-slate-950'
-                  : 'bg-white/10 text-slate-400'
-              }`}
-            >
-              {isAutoReplyEnabled ? 'ON' : 'OFF'}
-            </span>
-          </button>
-
-          {/* Location Radar Toggle Button in Header */}
-          <button
-            id="locationRadarToggleBtn"
-            type="button"
-            onClick={handleToggleLocationRadar}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95 ${
-              locationSession?.status === 'active'
-                ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 shadow-[0_0_12px_rgba(6,182,212,0.3)]'
-                : locationSession?.status === 'requested'
-                ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 animate-pulse'
-                : 'bg-white/[0.04] border-white/10 text-slate-400 hover:text-cyan-300 hover:border-cyan-500/30'
-            }`}
-            title="Mutual Two-Way Live Location Radar"
-          >
-            <Radio
-              className={`w-3.5 h-3.5 text-cyan-400 ${
-                locationSession?.status === 'active' ? 'animate-spin' : ''
-              }`}
-              style={locationSession?.status === 'active' ? { animationDuration: '4s' } : undefined}
-            />
-            <span className="text-[11px] font-semibold whitespace-nowrap">Live Radar</span>
-            {locationSession?.status === 'active' ? (
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-ping" />
-            ) : locationSession?.status === 'requested' ? (
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-            ) : null}
-          </button>
+        <div className="flex items-center gap-2">
+          {(!isFriend) && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-white/10 bg-black/40">
+              <Shield className="w-3.5 h-3.5 text-white/40" />
+              <span className="text-[9px] font-tech uppercase tracking-widest text-white/40">Encrypted</span>
+            </div>
+          )}
         </div>
       </header>
 
@@ -1069,18 +952,18 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         >
           {/* Empty Conversation Welcome */}
         {messages.length === 0 && (
-          <div className="w-full my-auto flex flex-col items-center justify-center text-center p-6 text-slate-400">
+          <div className="w-full my-auto flex flex-col items-center justify-center text-center p-6 text-slate-500">
             <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-3 shadow-inner">
               <MessageSquare className="w-6 h-6" />
             </div>
-            <h3 className="text-sm font-bold text-white mb-1">
+            <h3 className="text-sm font-bold text-slate-800 mb-1">
               End-to-End Encrypted Chat
             </h3>
-            <p className="text-xs text-slate-400 max-w-xs leading-relaxed mb-3">
+            <p className="text-xs text-slate-500 max-w-xs leading-relaxed mb-3">
               Send a message to start your private 1-on-1 conversation with @{targetUser.username}.
             </p>
             {targetUser.villageCity && (
-              <span className="text-[11px] font-mono text-amber-300/80 bg-[#161b26] px-2.5 py-1 rounded-lg border border-white/10">
+              <span className="text-[11px] font-mono text-amber-300/80 bg-white/50 px-2.5 py-1 rounded-lg border border-white/10">
                 Location: {targetUser.villageCity}
               </span>
             )}
@@ -1120,7 +1003,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
                   className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-lg transition-all ${
                     isOutgoing
                       ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-slate-950 font-medium rounded-tr-none backdrop-blur-md shadow-amber-500/10'
-                      : 'bg-[#0f121a]/85 backdrop-blur-md border border-white/10 text-slate-100 rounded-tl-none shadow-black/40'
+                      : 'bg-white/80/85 backdrop-blur-md border border-white/10 text-slate-100 rounded-tl-none shadow-black/40'
                   }`}
                 >
                   <p className="break-words whitespace-pre-wrap">{msg.text}</p>
@@ -1128,7 +1011,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
                   {/* Footer: Timestamp & Ticks */}
                   <div
                     className={`text-[10px] font-mono mt-1.5 flex items-center justify-end gap-1.5 select-none ${
-                      isOutgoing ? 'text-slate-900/80 font-semibold' : 'text-slate-400'
+                      isOutgoing ? 'text-slate-900/80 font-semibold' : 'text-slate-500'
                     }`}
                   >
                     <span>{formatTimestamp(msg.createdAt)}</span>
@@ -1170,7 +1053,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
                 <button
                   type="button"
                   onClick={() => setSelectedMessageForAction(msg)}
-                  className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-opacity cursor-pointer shrink-0"
+                  className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-white/10 transition-opacity cursor-pointer shrink-0"
                   title="Message options"
                 >
                   <MoreVertical className="w-4 h-4" />
@@ -1190,8 +1073,8 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
               <UserIcon className="w-3 h-3" />
               {partnerTyping.name}
             </span>
-            <div className="bg-[#0f121a]/85 backdrop-blur-md border border-white/10 text-slate-300 px-4 py-2.5 rounded-2xl rounded-tl-none flex items-center gap-2.5 text-xs shadow-md">
-              <span className="text-slate-400 font-medium">
+            <div className="bg-white/80/85 backdrop-blur-md border border-white/10 text-slate-600 px-4 py-2.5 rounded-2xl rounded-tl-none flex items-center gap-2.5 text-xs shadow-md">
+              <span className="text-slate-500 font-medium">
                 {partnerTyping.name} is typing
               </span>
               <span className="inline-flex items-center gap-1">
@@ -1210,83 +1093,26 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
       {/* 3. Bottom Input Action Bar */}
       <div
         id="chatInputBar"
-        className="w-full bg-[#0f121a]/95 backdrop-blur-xl border-t border-white/10 p-3 sm:p-4 z-20 shrink-0 flex flex-col gap-3"
+        className="w-full bg-white/80/95 backdrop-blur-xl border-t border-white/10 p-3 sm:p-4 z-20 shrink-0 flex flex-col gap-3"
       >
-        {/* Friendship Banner */}
-        {!isFriend && (
-          <div className="max-w-3xl mx-auto w-full p-3 rounded-xl bg-gradient-to-r from-amber-500/10 to-transparent border border-amber-500/30 flex items-center justify-between gap-3 text-sm flex-wrap">
-            <div className="flex flex-col">
-              <span className="font-bold text-amber-400 flex items-center gap-1.5">
-                <UserIcon className="w-4 h-4" /> Not friends yet
-              </span>
-              <span className="text-slate-400 text-xs">
-                {messages.length < 10 
-                  ? `Message limit: ${messages.length}/10. Send a friend request to unlock unlimited messaging.`
-                  : `Message limit reached. You must be friends to continue chatting.`}
-              </span>
-            </div>
-            
-            <div className="flex gap-2">
-              {pendingFriendRequest ? (
-                pendingFriendRequest.senderUsername === currentUser.username ? (
-                  <span className="px-3 py-1.5 bg-slate-800 text-slate-400 rounded-lg text-xs font-bold border border-white/10">Request Sent</span>
-                ) : (
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={async () => {
-                        if (pendingFriendRequest?.id) {
-                          await acceptFriendRequest(pendingFriendRequest.id, pendingFriendRequest.senderUsername, pendingFriendRequest.receiverUsername);
-                          setIsFriend(true);
-                          setPendingFriendRequest(null);
-                          setToastNotice("Friend request accepted!");
-                          setTimeout(() => setToastNotice(null), 3000);
-                        }
-                      }}
-                      className="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-lg text-xs font-bold border border-emerald-500/30 transition-colors"
-                    >
-                      Accept
-                    </button>
-                    <button 
-                      onClick={async () => {
-                        if (pendingFriendRequest?.id) {
-                          await rejectFriendRequest(pendingFriendRequest.id);
-                          setPendingFriendRequest(null);
-                          setToastNotice("Friend request rejected.");
-                          setTimeout(() => setToastNotice(null), 3000);
-                        }
-                      }}
-                      className="px-3 py-1.5 bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 rounded-lg text-xs font-bold border border-rose-500/30 transition-colors"
-                    >
-                      Reject
-                    </button>
-                  </div>
-                )
-              ) : (
-                <button 
-                  onClick={async () => {
-                    await sendFriendRequest(currentUser.username, targetUser.username);
-                    setPendingFriendRequest({
-                      id: `${currentUser.username}_${targetUser.username}`,
-                      senderUsername: currentUser.username,
-                      receiverUsername: targetUser.username,
-                      status: 'pending',
-                      timestamp: Date.now()
-                    });
-                    setToastNotice("Friend request sent!");
-                    setTimeout(() => setToastNotice(null), 3000);
-                  }}
-                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg text-xs font-bold shadow-md shadow-amber-500/20 transition-all active:scale-95"
-                >
-                  Send Request
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        <form
+        {/* Profile Panel Overlay */}
+      
+      {/* Upward Trail Indicator */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 -mt-6 flex flex-col items-center pointer-events-none opacity-0 group-hover:opacity-40 transition-opacity">
+          <div className="text-[8px] font-tech text-[#AFDDFF] uppercase tracking-[0.3em] mb-1">SWIPE TO TRANSMIT</div>
+          <div className="w-0.5 h-6 bg-gradient-to-t from-[#AFDDFF]/40 to-transparent"></div>
+        </div>
+        <motion.form
           onSubmit={(e) => e.preventDefault()}
-          className={`max-w-3xl mx-auto flex items-end gap-2 w-full transition-opacity ${(!isFriend && messages.length >= 10) ? 'opacity-50 pointer-events-none' : ''}`}
+          drag="y"
+          dragConstraints={{ top: 0, bottom: 0 }}
+          dragElastic={{ top: 0.8, bottom: 0 }}
+          onDragEnd={(e, info) => {
+            if (info.offset.y < -40 && inputText.trim()) {
+              handleSendMessage();
+            }
+          }}
+          className={`max-w-3xl mx-auto flex items-end gap-2 w-full transition-opacity group relative ${''}`}
         >
           {/* Voice Microphone */}
           <button
@@ -1295,8 +1121,8 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             onClick={handleMicClick}
             className={`p-3 rounded-xl border transition-all cursor-pointer active:scale-95 shrink-0 mb-0.5 ${
               micActive
-                ? 'bg-rose-500 text-white border-rose-400 shadow-lg shadow-rose-500/30 animate-pulse'
-                : 'bg-[#161b26] border-white/10 text-slate-300 hover:text-amber-400 hover:border-amber-500/40'
+                ? 'bg-rose-500 text-slate-800 border-rose-400 shadow-lg shadow-rose-500/30 animate-pulse'
+                : 'bg-white/50 border-white/10 text-slate-600 hover:text-amber-400 hover:border-amber-500/40'
             }`}
             title="Voice-to-Text Microphone"
           >
@@ -1313,7 +1139,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
                 ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-300 shadow-md shadow-cyan-500/20'
                 : locationSession?.status === 'requested'
                 ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 animate-pulse'
-                : 'bg-[#161b26] border-white/10 text-slate-400 hover:text-cyan-400 hover:border-cyan-500/40'
+                : 'bg-white/50 border-white/10 text-slate-500 hover:text-cyan-400 hover:border-cyan-500/40'
             }`}
             title={
               locationSession?.status === 'active'
@@ -1339,25 +1165,9 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
             value={inputText}
             onChange={handleInputChange}
             placeholder="Type a message..."
-            className="flex-1 max-h-36 min-h-[44px] px-4 py-3 bg-[#161b26] border border-white/10 focus:border-amber-500/70 focus:ring-2 focus:ring-amber-500/20 rounded-xl text-sm text-white placeholder:text-slate-500 focus:outline-none transition-all resize-none leading-relaxed overflow-y-auto"
+            className="flex-1 max-h-36 min-h-[44px] px-4 py-3 bg-white/50 border border-white/10 focus:border-amber-500/70 focus:ring-2 focus:ring-amber-500/20 rounded-xl text-base text-slate-800 placeholder:text-slate-500 focus:outline-none transition-all resize-none leading-relaxed overflow-y-auto"
           />
-
-          {/* Send Button: Dedicated tap/click to send */}
-          <button
-            id="chatSendBtn"
-            type="button"
-            onClick={() => handleSendMessage()}
-            disabled={!inputText.trim()}
-            className={`p-3 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl font-bold transition-all shadow-md active:scale-95 shrink-0 mb-0.5 ${
-              inputText.trim()
-                ? 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-amber-500/20 cursor-pointer'
-                : 'bg-white/[0.05] text-slate-500 border border-white/[0.05] cursor-not-allowed opacity-50'
-            }`}
-            title="Send Message"
-          >
-            <Send className="w-5 h-5" />
-          </button>
-        </form>
+        </motion.form>
       </div>
 
       {/* 4. Message Action Modal (2-Minute Unsend & Permanent Delete) */}
@@ -1369,21 +1179,21 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm rounded-3xl bg-[#0f121a] border border-white/10 p-5 flex flex-col gap-4 shadow-2xl relative animate-fade-in"
+            className="w-full max-w-sm rounded-3xl bg-white/80 border border-white/10 p-5 flex flex-col gap-4 shadow-2xl relative animate-fade-in"
           >
             {/* Header with snippet */}
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <span className="text-xs font-bold text-slate-300">Message Controls</span>
+              <span className="text-xs font-bold text-slate-600">Message Controls</span>
               <button
                 type="button"
                 onClick={() => setSelectedMessageForAction(null)}
-                className="p-1 rounded-full text-slate-400 hover:text-white"
+                className="p-1 rounded-full text-slate-500 hover:text-slate-800"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="p-3 rounded-xl bg-[#161b26] border border-white/[0.06] text-xs text-slate-300 max-h-24 overflow-y-auto whitespace-pre-wrap">
+            <div className="p-3 rounded-xl bg-white/50 border border-white/[0.06] text-xs text-slate-600 max-h-24 overflow-y-auto whitespace-pre-wrap">
               "{selectedMessageForAction.text}"
             </div>
 
@@ -1426,9 +1236,9 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
                 id="deletePermanentlyBtn"
                 type="button"
                 onClick={() => handleDeletePermanently(selectedMessageForAction)}
-                className="w-full py-3 px-4 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-200 text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
+                className="w-full py-3 px-4 rounded-xl bg-white/30 hover:bg-white/40 border border-white/10 text-slate-200 text-xs font-bold flex items-center gap-2 transition-all cursor-pointer"
               >
-                <Trash2 className="w-4 h-4 text-slate-400" />
+                <Trash2 className="w-4 h-4 text-slate-500" />
                 <span>Delete Permanently</span>
               </button>
 
@@ -1436,7 +1246,7 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
               <button
                 type="button"
                 onClick={() => handleCopyMessage(selectedMessageForAction.text)}
-                className="w-full py-2.5 px-4 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/[0.06] text-slate-400 hover:text-white text-xs font-medium flex items-center gap-2 transition-all cursor-pointer"
+                className="w-full py-2.5 px-4 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/[0.06] text-slate-500 hover:text-slate-800 text-xs font-medium flex items-center gap-2 transition-all cursor-pointer"
               >
                 <Copy className="w-4 h-4" />
                 <span>Copy Text</span>
@@ -1453,11 +1263,11 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
         >
           <div 
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-sm bg-[#0f121a] border border-white/10 rounded-3xl p-6 shadow-2xl relative overflow-hidden"
+            className="w-full max-w-sm bg-white/80 border border-white/10 rounded-3xl p-6 shadow-2xl relative overflow-hidden"
           >
             <button
               onClick={() => setShowProfileModal(false)}
-              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-colors"
+              className="absolute top-4 right-4 p-2 text-slate-500 hover:text-slate-800 rounded-full bg-white/5 hover:bg-white/10 transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
@@ -1472,12 +1282,12 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
                     className="w-full h-full rounded-full object-cover"
                   />
                 ) : (
-                  <div className="w-full h-full bg-[#161b26] rounded-full flex items-center justify-center text-amber-300 font-bold text-3xl">
+                  <div className="w-full h-full bg-white/50 rounded-full flex items-center justify-center text-amber-300 font-bold text-3xl">
                     {targetUser.fullName.charAt(0).toUpperCase()}
                   </div>
                 )}
               </div>
-              <h2 className="text-xl font-bold text-white mb-1">{targetUser.fullName}</h2>
+              <h2 className="text-xl font-bold text-slate-800 mb-1">{targetUser.fullName}</h2>
               <p className="text-sm font-mono text-amber-400 mb-4">@{targetUser.username}</p>
               
               {targetUserGoal ? (

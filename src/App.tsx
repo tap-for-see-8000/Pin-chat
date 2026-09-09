@@ -19,10 +19,16 @@ import { MoodTrackerUI } from './components/MoodTrackerUI';
 import { BottomNavigation } from './components/BottomNavigation';
 import { WeeklyReportScreen } from './components/WeeklyReportScreen';
 import { ProfileScreen } from './components/ProfileScreen';
+import { NotificationsScreen } from './components/NotificationsScreen';
+import { ChatProfilePanel } from './components/ChatProfilePanel';
 import { UserRecord, PublicUserProfile, AppScreen } from './types';
 import { getCurrentSession, clearCurrentSession, updateUserPresence } from './userService';
 
 export default function App() {
+  const handleOpenChatProfile = () => {
+    setCurrentScreen('chat_profile');
+  };
+  
   // Restore logged-in user from localStorage session (refresh never logs out)
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(() => getCurrentSession());
 
@@ -113,7 +119,7 @@ export default function App() {
   return (
     <div
       id="app-container"
-      className="w-full min-h-screen bg-[#07090e] text-slate-100 selection:bg-amber-500/30 selection:text-amber-200 relative font-sans"
+      className="w-full min-h-screen bg-black text-white relative font-sans overflow-hidden"
     >
       {/* 1. Auth Screen (Registration & Login) */}
       {currentScreen === 'auth' && (
@@ -145,6 +151,7 @@ export default function App() {
           currentUser={currentUser}
           targetUser={activeTargetUser}
           onBack={handleBackToInbox}
+          onOpenProfile={handleOpenChatProfile}
         />
       )}
 
@@ -163,6 +170,19 @@ export default function App() {
          <ProfileScreen currentUser={currentUser} onLogout={handleLogout} />
       )}
 
+            {/* 9. Chat Profile Dedicated Screen */}
+      {currentScreen === 'chat_profile' && currentUser && activeTargetUser && (
+         <ChatProfilePanel 
+           targetUser={activeTargetUser} 
+           currentUser={currentUser} 
+           onClose={() => setCurrentScreen('chat')} 
+         />
+      )}
+      {/* 8. Notifications Screen */}
+      {currentScreen === 'notifications' && currentUser && (
+         <NotificationsScreen currentUser={currentUser} onBack={() => setCurrentScreen('mood')} />
+      )}
+      
       {/* Global Bottom Navigation */}
       {(['mood', 'inbox', 'weekly_report', 'profile'].includes(currentScreen)) && currentUser && (
          <BottomNavigation currentScreen={currentScreen} onNavigate={(screen) => setCurrentScreen(screen)} />

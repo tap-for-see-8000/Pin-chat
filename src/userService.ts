@@ -29,6 +29,7 @@ import {
   getDocs,
   onSnapshot,
   serverTimestamp,
+  addDoc,
 } from 'firebase/firestore';
 import { UserRecord, PublicUserProfile, ChatConversation, UserPresence, LocationSession, LocationUserCoordinate } from './types';
 
@@ -545,7 +546,8 @@ export function saveConversationItem(
   currentUserUsername: string,
   otherUser: PublicUserProfile,
   lastMessageText: string,
-  lastMessageTime: number
+  lastMessageTime: number,
+  unread: boolean = false
 ): void {
   try {
     const userKey = currentUserUsername.toLowerCase();
@@ -790,3 +792,74 @@ export async function getAllRegisteredUsers(
 }
 
 
+
+import { SecretCapsule } from './types';
+
+export const getFriendCount = async (username: string): Promise<number> => {
+  if (!db) return 0;
+  try {
+    const friendshipsRef = collection(db, 'friendships');
+    const q1 = query(friendshipsRef, where('user1', '==', username), where('status', '==', 'active'));
+    const q2 = query(friendshipsRef, where('user2', '==', username), where('status', '==', 'active'));
+    const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+    return snap1.size + snap2.size;
+  } catch (e) {
+    console.error("Error getting friend count", e);
+    return 0;
+  }
+};
+
+export const updateProfileData = async (username: string, updates: Partial<UserRecord>) => {
+  if (!db) return;
+  const userRef = doc(db, 'users', username.toLowerCase());
+  await updateDoc(userRef, updates);
+  
+  // Update local session
+  const session = getCurrentSession();
+  if (session && session.username.toLowerCase() === username.toLowerCase()) {
+    saveCurrentSession({ ...session, ...updates });
+  }
+};
+
+export const createSecretCapsule = async (capsule: Omit<SecretCapsule, 'id' | 'isUnlocked'>) => {
+  if (!db) return;
+  const capsulesRef = collection(db, 'secretCapsules');
+  await addDoc(capsulesRef, {
+    ...capsule,
+    isUnlocked: false
+  });
+};
+
+export const getSecretCapsulesForUser = (username: string, callback: (capsules: SecretCapsule[]) => void) => {
+  if (!db) return () => {};
+  const capsulesRef = collection(db, 'secretCapsules');
+  const q = query(capsulesRef, where('receiverUsername', '==', username));
+  
+  return onSnapshot(q, (snapshot) => {
+    const capsules = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SecretCapsule));
+    callback(capsules);
+  });
+};
+
+export const unlockSecretCapsule = async (capsuleId: string) => {
+  if (!db) return;
+  const capsuleRef = doc(db, 'secretCapsules', capsuleId);
+  await updateDoc(capsuleRef, { isUnlocked: true });
+};
+
+export const checkUsernameAvailable = async (username: string): Promise<boolean> => {
+  if (!db) return false;
+  const userRef = doc(db, 'users', username.toLowerCase());
+  const snap = await getDoc(userRef);
+  return !snap.exists();
+};
+
+export function clearConversationUnread(currentUserUsername: string, targetUsername: string): void {
+  try {
+    const userKey = currentUserUsername.toLowerCase();
+    const chatId = getChatId(currentUserUsername, targetUsername);
+    const existing = getSavedConversations(userKey);
+    const updated = existing.map(c => c.chatId === chatId ? { ...c, unread: false } : c);
+    localStorage.setItem(`pinchat_conversations_${userKey}`, JSON.stringify(updated));
+  } catch {}
+}

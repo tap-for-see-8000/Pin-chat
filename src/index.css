@@ -1,30 +1,23 @@
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
 
+@theme {
+  --font-display: "Space Grotesk", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-sans: "Manrope", sans-serif;
+  --color-accent-blue: #AFDDFF;
+  --color-accent-red: #c81b1c;
+}
+
 :root {
-  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
-  
-  --bg-canvas: #07090e;
-  --bg-surface: #0f121a;
-  --bg-surface-elevated: #161b26;
-  --bg-surface-hover: #1c2230;
-  
-  --border-subtle: rgba(255, 255, 255, 0.07);
-  --border-medium: rgba(255, 255, 255, 0.12);
-  --border-accent: rgba(245, 158, 11, 0.4);
-  
-  --accent-gold: #f59e0b;
-  --accent-amber-light: #fbbf24;
-  --accent-glow: rgba(245, 158, 11, 0.15);
-  
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --bg-canvas: #000000;
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.6);
+  --text-muted: rgba(255, 255, 255, 0.4);
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: "Manrope", sans-serif;
   background-color: var(--bg-canvas);
   color: var(--text-primary);
   min-height: 100vh;
@@ -34,170 +27,81 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom Cinematic Ambient Glow */
-.cinematic-glow {
-  background: radial-gradient(circle at 50% 20%, rgba(245, 158, 11, 0.08) 0%, transparent 60%),
-              radial-gradient(circle at 80% 80%, rgba(99, 102, 241, 0.05) 0%, transparent 50%),
-              #07090e;
+/* Glassmorphism System */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
-.pin-font {
-  font-family: var(--font-mono);
-  letter-spacing: 0.18em;
+.glass-panel-heavy {
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.tech-grid {
+  background-size: 25% 33.33%;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+}
+
+/* Typography Classes */
+.font-display {
+  font-family: "Space Grotesk", sans-serif;
+}
+
+.font-tech {
+  font-family: "JetBrains Mono", monospace;
+}
+
+/* Animations */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
 }
 
 /* Custom Subtle Scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 4px;
+  height: 4px;
 }
-
 ::-webkit-scrollbar-track {
-  background: #090c12;
+  background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
-  background: #1e2433;
-  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
-  background: #2d354b;
+  background: rgba(255, 255, 255, 0.4);
 }
 
-/* Cyberpunk Anime Neon Eye Keyframes */
-@keyframes eye-blink-anim {
-  0% { transform: scaleY(1); }
-  50% { transform: scaleY(0.01); }
-  100% { transform: scaleY(1); }
-}
-
-@keyframes hud-spin-slow {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@keyframes hud-spin-reverse {
-  from { transform: rotate(360deg); }
-  to { transform: rotate(0deg); }
-}
-
-@keyframes neon-pulse-red-glow {
-  0%, 100% {
-    filter: drop-shadow(0 0 10px rgba(255, 0, 85, 0.75)) drop-shadow(0 0 24px rgba(255, 0, 85, 0.45));
-    opacity: 0.88;
-  }
-  50% {
-    filter: drop-shadow(0 0 20px rgba(255, 0, 85, 0.98)) drop-shadow(0 0 40px rgba(255, 0, 85, 0.7));
-    opacity: 1;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }
-
-@keyframes neon-pulse-green-glow {
-  0%, 100% {
-    filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.75)) drop-shadow(0 0 24px rgba(0, 255, 136, 0.45));
-    opacity: 0.88;
-  }
-  50% {
-    filter: drop-shadow(0 0 20px rgba(0, 255, 136, 0.98)) drop-shadow(0 0 40px rgba(0, 255, 136, 0.7));
-    opacity: 1;
-  }
-}
-
-@keyframes ripple-ring {
-  0% {
-    r: 45px;
-    opacity: 0.85;
-  }
-  100% {
-    r: 140px;
-    opacity: 0;
-  }
-}
-
-.animate-eye-blink {
-  animation: eye-blink-anim 0.26s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-  transform-origin: center center;
-}
-
-.animate-hud-spin {
-  animation: hud-spin-slow 24s linear infinite;
-  transform-origin: center center;
-}
-
-.animate-hud-spin-reverse {
-  animation: hud-spin-reverse 32s linear infinite;
-  transform-origin: center center;
-}
-
-.animate-neon-red {
-  animation: neon-pulse-red-glow 2.8s ease-in-out infinite;
-}
-
-.animate-neon-green {
-  animation: neon-pulse-green-glow 2.8s ease-in-out infinite;
-}
-
-.animate-ripple-pulse {
-  animation: ripple-ring 1s cubic-bezier(0.1, 0.8, 0.2, 1) forwards;
-}
-
-/* Cyberpunk Leaflet Custom Styling */
-.leaflet-container {
-  background-color: #07090e !important;
-  font-family: inherit;
-}
-
-.leaflet-tile {
-  filter: brightness(0.85) contrast(1.15) saturate(1.1);
-}
-
-.leaflet-bar {
-  border: 1px solid rgba(255, 255, 255, 0.15) !important;
-  border-radius: 8px !important;
-  overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
-}
-
-.leaflet-bar a {
-  background-color: #0f121a !important;
-  color: #f1f5f9 !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-
-.leaflet-bar a:hover {
-  background-color: #1e2535 !important;
-  color: #f59e0b !important;
-}
-
-.leaflet-control-attribution {
-  background: rgba(7, 9, 14, 0.8) !important;
-  color: #64748b !important;
-  font-size: 9px !important;
-}
-
-.leaflet-control-attribution a {
-  color: #94a3b8 !important;
-}
-
-/* Custom Marker Glow Animation */
-@keyframes radar-pulse-cyan {
-  0% { transform: scale(0.9); opacity: 0.9; }
-  50% { transform: scale(1.6); opacity: 0.15; }
-  100% { transform: scale(0.9); opacity: 0.9; }
-}
-
-@keyframes radar-pulse-magenta {
-  0% { transform: scale(0.9); opacity: 0.9; }
-  50% { transform: scale(1.6); opacity: 0.15; }
-  100% { transform: scale(0.9); opacity: 0.9; }
-}
-
-.marker-pulse-cyan {
-  animation: radar-pulse-cyan 2s infinite ease-out;
-}
-
-.marker-pulse-magenta {
-  animation: radar-pulse-magenta 2s infinite ease-out;
-}
-
