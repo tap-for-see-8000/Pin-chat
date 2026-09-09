@@ -29,7 +29,20 @@ export interface MoodRecord {
   timestamp: number;
 }
 
-export type FriendRequestStatus = 'pending' | 'accepted' | 'rejected';
+export type NotificationType = 'friend_request';
+
+export interface AppNotification {
+  id: string;
+  receiverUsername: string;
+  senderUsername: string;
+  type: NotificationType;
+  relatedRequestId: string;
+  isRead: boolean;
+  handled: boolean;
+  timestamp: number;
+}
+
+export type FriendRequestStatus = 'pending' | 'accepted' | 'declined';
 
 export interface FriendRequest {
   id?: string;

@@ -20,7 +20,8 @@ import {
   FriendRequest,
   Friendship,
   GoalProgressRecord,
-  UserRecord
+  UserRecord,
+  AppNotification
 } from '../types';
 
 // -- MOOD --
@@ -72,11 +73,35 @@ export async function checkIsFriend(userA: string, userB: string): Promise<boole
 
 export async function sendFriendRequest(sender: string, receiver: string): Promise<void> {
   const id = `${sender}_${receiver}`;
+  
+  // 1. Check if friendship already exists
+  const [u1, u2] = [sender, receiver].sort();
+  const friendshipId = `${u1}_${u2}`;
+  const friendshipSnap = await getDoc(doc(db, 'friends', friendshipId));
+  if (friendshipSnap.exists()) return; // Already friends
+  
+  // 2. Check if a request already exists
+  const reqSnap = await getDoc(doc(db, 'friendRequests', id));
+  if (reqSnap.exists() && reqSnap.data().status === 'pending') return; // Already pending
+
   const docRef = doc(db, 'friendRequests', id);
   await setDoc(docRef, {
     senderUsername: sender,
     receiverUsername: receiver,
     status: 'pending',
+    timestamp: Date.now()
+  });
+
+  // 3. Create Notification
+  const notifId = `notif_${id}`;
+  await setDoc(doc(db, 'notifications', notifId), {
+    id: notifId,
+    receiverUsername: receiver,
+    senderUsername: sender,
+    type: 'friend_request',
+    relatedRequestId: id,
+    isRead: false,
+    handled: false,
     timestamp: Date.now()
   });
 }
@@ -100,11 +125,27 @@ export async function acceptFriendRequest(requestId: string, sender: string, rec
     status: 'active',
     timestamp: Date.now()
   });
+  
+  // Update Notification
+  const notifId = `notif_${requestId}`;
+  const notifRef = doc(db, 'notifications', notifId);
+  const notifSnap = await getDoc(notifRef);
+  if (notifSnap.exists()) {
+    await updateDoc(notifRef, { handled: true, isRead: true });
+  }
 }
 
 export async function rejectFriendRequest(requestId: string): Promise<void> {
   const reqRef = doc(db, 'friendRequests', requestId);
-  await updateDoc(reqRef, { status: 'rejected' });
+  await updateDoc(reqRef, { status: 'declined' });
+  
+  // Update Notification
+  const notifId = `notif_${requestId}`;
+  const notifRef = doc(db, 'notifications', notifId);
+  const notifSnap = await getDoc(notifRef);
+  if (notifSnap.exists()) {
+    await updateDoc(notifRef, { handled: true, isRead: true });
+  }
 }
 
 export async function getMessageCount(chatId: string): Promise<number> {
@@ -149,4 +190,18 @@ export async function updateUserProfile(username: string, data: Partial<UserReco
     ...data,
     updatedAt: Date.now()
   });
+}
+
+export async function getNotifications(username: string): Promise<AppNotification[]> {
+  const q = query(collection(db, 'notifications'), where('receiverUsername', '==', username), where('handled', '==', false));
+  const snap = await getDocs(q);
+  return snap.docs.map(d => d.data() as AppNotification).sort((a, b) => b.timestamp - a.timestamp);
+}
+
+export async function getPendingFriendRequestById(requestId: string): Promise<FriendRequest | null> {
+  const snap = await getDoc(doc(db, 'friendRequests', requestId));
+  if (snap.exists()) {
+    return snap.data() as FriendRequest;
+  }
+  return null;
 }
