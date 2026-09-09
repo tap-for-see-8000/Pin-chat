@@ -15,6 +15,10 @@ import { AuthScreen } from './components/AuthScreen';
 import { InboxScreen } from './components/InboxScreen';
 import { ChatRoomScreen } from './components/ChatRoomScreen';
 import { DecoyChatScreen } from './components/DecoyChatScreen';
+import { MoodTrackerUI } from './components/MoodTrackerUI';
+import { BottomNavigation } from './components/BottomNavigation';
+import { WeeklyReportScreen } from './components/WeeklyReportScreen';
+import { ProfileScreen } from './components/ProfileScreen';
 import { UserRecord, PublicUserProfile, AppScreen } from './types';
 import { getCurrentSession, clearCurrentSession, updateUserPresence } from './userService';
 
@@ -22,9 +26,8 @@ export default function App() {
   // Restore logged-in user from localStorage session (refresh never logs out)
   const [currentUser, setCurrentUser] = useState<UserRecord | null>(() => getCurrentSession());
 
-  // Determine initial screen based on persisted session
   const [currentScreen, setCurrentScreen] = useState<AppScreen>(() =>
-    getCurrentSession() ? 'inbox' : 'auth'
+    getCurrentSession() ? 'mood' : 'auth'
   );
 
   // Active 1-on-1 chat state
@@ -71,7 +74,7 @@ export default function App() {
   // Auth Success Handler (Registration or Login)
   const handleAuthSuccess = (user: UserRecord) => {
     setCurrentUser(user);
-    setCurrentScreen('inbox');
+    setCurrentScreen('mood');
   };
 
   // Open Direct 1-on-1 Chat Handler (Real vs Decoy)
@@ -143,6 +146,26 @@ export default function App() {
           targetUser={activeTargetUser}
           onBack={handleBackToInbox}
         />
+      )}
+
+      {/* 5. Mood Home Screen */}
+      {currentScreen === 'mood' && currentUser && (
+         <MoodTrackerUI onNavigate={(screen) => setCurrentScreen(screen)} currentUser={currentUser} />
+      )}
+
+      {/* 6. Weekly Report Screen */}
+      {currentScreen === 'weekly_report' && currentUser && (
+         <WeeklyReportScreen currentUser={currentUser} />
+      )}
+
+      {/* 7. Profile Screen */}
+      {currentScreen === 'profile' && currentUser && (
+         <ProfileScreen currentUser={currentUser} onLogout={handleLogout} />
+      )}
+
+      {/* Global Bottom Navigation */}
+      {(['mood', 'inbox', 'weekly_report', 'profile'].includes(currentScreen)) && currentUser && (
+         <BottomNavigation currentScreen={currentScreen} onNavigate={(screen) => setCurrentScreen(screen)} />
       )}
     </div>
   );

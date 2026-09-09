@@ -11,8 +11,48 @@ export interface UserRecord {
   villageCity: string;  // गांव / शहर
   gender: 'male' | 'female';
   avatarUrl: string;
+  aboutMe?: string;
+  personalGoal?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export type AppScreen = 'auth' | 'inbox' | 'chat' | 'mood' | 'weekly_report' | 'profile';
+
+export type MoodType = 'happy' | 'sad' | 'low' | 'angry' | 'missing anyone';
+
+export interface MoodRecord {
+  id?: string;
+  username: string;
+  mood: MoodType;
+  date: string; // YYYY-MM-DD format
+  timestamp: number;
+}
+
+export type FriendRequestStatus = 'pending' | 'accepted' | 'rejected';
+
+export interface FriendRequest {
+  id?: string;
+  senderUsername: string;
+  receiverUsername: string;
+  status: FriendRequestStatus;
+  timestamp: number;
+}
+
+export interface Friendship {
+  id?: string;
+  user1: string; // alphabetically first username
+  user2: string; // alphabetically second username
+  status: 'active';
+  timestamp: number;
+}
+
+export interface GoalProgressRecord {
+  id?: string;
+  username: string;
+  date: string; // YYYY-MM-DD format
+  completed: boolean;
+  timestamp: number;
 }
 
 // Real-time user online presence
@@ -245,5 +285,3 @@ export interface DecoyMessage {
   isUser?: boolean;
   badge?: string;
 }
-
-export type AppScreen = 'auth' | 'inbox' | 'chat';

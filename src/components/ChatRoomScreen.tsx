@@ -86,6 +86,14 @@ import {
   getChatAutoReplySettings,
   saveChatAutoReplySettings,
 } from '../services/aiAutoReplyEngine';
+import { 
+  checkIsFriend, 
+  sendFriendRequest, 
+  getPendingFriendRequests, 
+  acceptFriendRequest, 
+  rejectFriendRequest,
+  getWeeklyGoalProgress
+} from '../services/appService';
 import { AutoReplyStyle } from '../types';
 
 interface ChatRoomScreenProps {
@@ -128,6 +136,12 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   const [selectedMessageForAction, setSelectedMessageForAction] = useState<ChatMessage | null>(null);
   const [toastNotice, setToastNotice] = useState<string | null>(null);
 
+  // Friendship State
+  const [isFriend, setIsFriend] = useState<boolean>(true); // assume true while loading
+  const [pendingFriendRequest, setPendingFriendRequest] = useState<any>(null);
+  const [showProfileModal, setShowProfileModal] = useState<boolean>(false);
+  const [targetUserGoal, setTargetUserGoal] = useState<any>(null);
+
   // Synchronized refs for listeners
   const isAutoReplyEnabledRef = useRef(isAutoReplyEnabled);
   isAutoReplyEnabledRef.current = isAutoReplyEnabled;
@@ -149,6 +163,43 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     isTyping: false,
     name: targetUser.fullName || targetUser.username,
   });
+
+  // Check friendship and goal on mount
+  useEffect(() => {
+    const fetchSocialData = async () => {
+      const friendStatus = await checkIsFriend(currentUser.username, targetUser.username);
+      setIsFriend(friendStatus);
+
+      // Check if there is a pending request to us from them
+      const requests = await getPendingFriendRequests(currentUser.username);
+      const req = requests.find(r => r.senderUsername === targetUser.username);
+      if (req) {
+        setPendingFriendRequest(req);
+      }
+
+      // Check for outgoing request
+      const outRequests = await getPendingFriendRequests(targetUser.username);
+      const outReq = outRequests.find(r => r.senderUsername === currentUser.username);
+      if (outReq) {
+        setPendingFriendRequest(outReq); // We will use status to show "Pending..."
+      }
+
+      // Fetch target user's profile to get goal
+      try {
+        const { getDoc, doc } = await import('firebase/firestore');
+        const snap = await getDoc(doc(db, 'users', targetUser.username));
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.personalGoal) {
+            setTargetUserGoal(data.personalGoal);
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch target user goal', e);
+      }
+    };
+    fetchSocialData();
+  }, [currentUser.username, targetUser.username]);
 
   // Storage key for persistent chat history
   const historyStorageKey = `pinchat_messages_${chatId}`;
@@ -589,6 +640,12 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
     if (e) e.preventDefault();
     const cleanText = inputText.trim();
     if (!cleanText) return;
+
+    if (!isFriend && messages.length >= 10) {
+      setToastNotice("Message limit reached. Send a friend request to continue chatting.");
+      setTimeout(() => setToastNotice(null), 4000);
+      return;
+    }
 
     const messageId = `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const now = Date.now();
@@ -1153,11 +1210,83 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
       {/* 3. Bottom Input Action Bar */}
       <div
         id="chatInputBar"
-        className="w-full bg-[#0f121a]/95 backdrop-blur-xl border-t border-white/10 p-3 sm:p-4 z-20 shrink-0"
+        className="w-full bg-[#0f121a]/95 backdrop-blur-xl border-t border-white/10 p-3 sm:p-4 z-20 shrink-0 flex flex-col gap-3"
       >
+        {/* Friendship Banner */}
+        {!isFriend && (
+          <div className="max-w-3xl mx-auto w-full p-3 rounded-xl bg-gradient-to-r from-amber-500/10 to-transparent border border-amber-500/30 flex items-center justify-between gap-3 text-sm flex-wrap">
+            <div className="flex flex-col">
+              <span className="font-bold text-amber-400 flex items-center gap-1.5">
+                <UserIcon className="w-4 h-4" /> Not friends yet
+              </span>
+              <span className="text-slate-400 text-xs">
+                {messages.length < 10 
+                  ? `Message limit: ${messages.length}/10. Send a friend request to unlock unlimited messaging.`
+                  : `Message limit reached. You must be friends to continue chatting.`}
+              </span>
+            </div>
+            
+            <div className="flex gap-2">
+              {pendingFriendRequest ? (
+                pendingFriendRequest.senderUsername === currentUser.username ? (
+                  <span className="px-3 py-1.5 bg-slate-800 text-slate-400 rounded-lg text-xs font-bold border border-white/10">Request Sent</span>
+                ) : (
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={async () => {
+                        if (pendingFriendRequest?.id) {
+                          await acceptFriendRequest(pendingFriendRequest.id, pendingFriendRequest.senderUsername, pendingFriendRequest.receiverUsername);
+                          setIsFriend(true);
+                          setPendingFriendRequest(null);
+                          setToastNotice("Friend request accepted!");
+                          setTimeout(() => setToastNotice(null), 3000);
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded-lg text-xs font-bold border border-emerald-500/30 transition-colors"
+                    >
+                      Accept
+                    </button>
+                    <button 
+                      onClick={async () => {
+                        if (pendingFriendRequest?.id) {
+                          await rejectFriendRequest(pendingFriendRequest.id);
+                          setPendingFriendRequest(null);
+                          setToastNotice("Friend request rejected.");
+                          setTimeout(() => setToastNotice(null), 3000);
+                        }
+                      }}
+                      className="px-3 py-1.5 bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 rounded-lg text-xs font-bold border border-rose-500/30 transition-colors"
+                    >
+                      Reject
+                    </button>
+                  </div>
+                )
+              ) : (
+                <button 
+                  onClick={async () => {
+                    await sendFriendRequest(currentUser.username, targetUser.username);
+                    setPendingFriendRequest({
+                      id: `${currentUser.username}_${targetUser.username}`,
+                      senderUsername: currentUser.username,
+                      receiverUsername: targetUser.username,
+                      status: 'pending',
+                      timestamp: Date.now()
+                    });
+                    setToastNotice("Friend request sent!");
+                    setTimeout(() => setToastNotice(null), 3000);
+                  }}
+                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg text-xs font-bold shadow-md shadow-amber-500/20 transition-all active:scale-95"
+                >
+                  Send Request
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <form
           onSubmit={(e) => e.preventDefault()}
-          className="max-w-3xl mx-auto flex items-end gap-2"
+          className={`max-w-3xl mx-auto flex items-end gap-2 w-full transition-opacity ${(!isFriend && messages.length >= 10) ? 'opacity-50 pointer-events-none' : ''}`}
         >
           {/* Voice Microphone */}
           <button
@@ -1316,6 +1445,56 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
           </div>
         </div>
       )}
+      {/* Profile Modal */}
+      {showProfileModal && (
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm select-none"
+          onClick={() => setShowProfileModal(false)}
+        >
+          <div 
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-sm bg-[#0f121a] border border-white/10 rounded-3xl p-6 shadow-2xl relative overflow-hidden"
+          >
+            <button
+              onClick={() => setShowProfileModal(false)}
+              className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white rounded-full bg-white/5 hover:bg-white/10 transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="flex flex-col items-center text-center mt-2">
+              <div className="w-20 h-20 rounded-full p-1 bg-gradient-to-tr from-amber-500/60 to-amber-600/60 border border-amber-500/40 mb-4 shadow-lg shadow-amber-500/20">
+                {targetUser.avatarUrl ? (
+                  <img
+                    src={targetUser.avatarUrl}
+                    alt={targetUser.fullName}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full rounded-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-[#161b26] rounded-full flex items-center justify-center text-amber-300 font-bold text-3xl">
+                    {targetUser.fullName.charAt(0).toUpperCase()}
+                  </div>
+                )}
+              </div>
+              <h2 className="text-xl font-bold text-white mb-1">{targetUser.fullName}</h2>
+              <p className="text-sm font-mono text-amber-400 mb-4">@{targetUser.username}</p>
+              
+              {targetUserGoal ? (
+                <div className="w-full mt-4 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-left">
+                  <h3 className="text-xs font-bold text-amber-400 mb-2 uppercase tracking-wider">Current Goal</h3>
+                  <p className="text-sm text-slate-200">{targetUserGoal.description}</p>
+                </div>
+              ) : (
+                <div className="w-full mt-4 p-4 rounded-2xl bg-white/5 border border-white/10 text-center">
+                  <p className="text-sm text-slate-500 italic">No goal set.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };
