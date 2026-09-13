@@ -16,7 +16,8 @@
  * - Message Unsend & Permanent Delete helpers
  */
 
-import { db } from './firebase';
+import { db, rtdb } from './firebase';
+import { ref, set, get, child, update, onValue } from 'firebase/database';
 import {
   doc,
   getDoc,
@@ -810,9 +811,18 @@ export const getFriendCount = async (username: string): Promise<number> => {
 };
 
 export const updateProfileData = async (username: string, updates: Partial<UserRecord>) => {
-  if (!db) return;
-  const userRef = doc(db, 'users', username.toLowerCase());
-  await updateDoc(userRef, updates);
+  if (rtdb) {
+    try {
+       const userRef = ref(rtdb, 'users/' + username.toLowerCase());
+       await update(userRef, updates);
+    } catch (err) {}
+  }
+  if (db) {
+    try {
+      const userRef = doc(db, 'users', username.toLowerCase());
+      await updateDoc(userRef, updates);
+    } catch (err) {}
+  }
   
   // Update local session
   const session = getCurrentSession();

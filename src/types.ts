@@ -21,7 +21,7 @@ export interface UserRecord {
   updatedAt: number;
 }
 
-export type AppScreen = 'auth' | 'inbox' | 'chat' | 'chat_profile' | 'mood' | 'weekly_report' | 'profile' | 'notifications';
+export type AppScreen = 'auth' | 'inbox' | 'chat' | 'chat_profile' | 'mood' | 'weekly_report' | 'profile' | 'notifications' | 'focus';
 
 export type MoodType = 'happy' | 'sad' | 'low' | 'angry' | 'missing anyone';
 

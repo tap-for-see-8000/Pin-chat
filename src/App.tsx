@@ -11,6 +11,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { WifiOff } from 'lucide-react';
 import { AuthScreen } from './components/AuthScreen';
 import { InboxScreen } from './components/InboxScreen';
 import { ChatRoomScreen } from './components/ChatRoomScreen';
@@ -20,11 +21,36 @@ import { BottomNavigation } from './components/BottomNavigation';
 import { WeeklyReportScreen } from './components/WeeklyReportScreen';
 import { ProfileScreen } from './components/ProfileScreen';
 import { NotificationsScreen } from './components/NotificationsScreen';
+import { FocusScreen } from './components/FocusScreen';
 import { ChatProfilePanel } from './components/ChatProfilePanel';
 import { UserRecord, PublicUserProfile, AppScreen } from './types';
-import { getCurrentSession, clearCurrentSession, updateUserPresence } from './userService';
+import { getCurrentSession, clearCurrentSession, updateUserPresence, saveCurrentSession } from './userService';
+import { rtdb } from './firebase';
+import { ref, get } from 'firebase/database';
 
 export default function App() {
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+
+  useEffect(() => {
+    const handleOfflineStatus = (e: any) => {
+      setIsOffline(e.detail.isOffline);
+    };
+    
+    // Native Listener from Capacitor Network Plugin
+    window.addEventListener('app-offline-status', handleOfflineStatus);
+    
+    // Web Fallbacks
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    
+    return () => {
+      window.removeEventListener('app-offline-status', handleOfflineStatus);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
   const handleOpenChatProfile = () => {
     setCurrentScreen('chat_profile');
   };
@@ -121,6 +147,12 @@ export default function App() {
       id="app-container"
       className="w-full min-h-screen bg-black text-white relative font-sans overflow-hidden"
     >
+      {/* Global Offline Banner */}
+      {isOffline && (
+        <div className="absolute top-0 left-0 w-full bg-rose-500 text-white text-xs font-bold font-tech tracking-widest uppercase py-1.5 px-4 flex items-center justify-center gap-2 z-[9999] shadow-lg animate-in slide-in-from-top-full duration-300">
+          <WifiOff className="w-4 h-4" /> NO INTERNET CONNECTION
+        </div>
+      )}
       {/* 1. Auth Screen (Registration & Login) */}
       {currentScreen === 'auth' && (
         <AuthScreen onAuthSuccess={handleAuthSuccess} />
@@ -160,6 +192,12 @@ export default function App() {
          <MoodTrackerUI onNavigate={(screen) => setCurrentScreen(screen)} currentUser={currentUser} />
       )}
 
+      
+      {/* Focus Screen */}
+      {currentScreen === 'focus' && currentUser && (
+         <FocusScreen currentUser={currentUser} />
+      )}
+      
       {/* 6. Weekly Report Screen */}
       {currentScreen === 'weekly_report' && currentUser && (
          <WeeklyReportScreen currentUser={currentUser} />
@@ -184,7 +222,7 @@ export default function App() {
       )}
       
       {/* Global Bottom Navigation */}
-      {(['mood', 'inbox', 'weekly_report', 'profile'].includes(currentScreen)) && currentUser && (
+      {(['mood', 'inbox', 'weekly_report', 'profile', 'focus'].includes(currentScreen)) && currentUser && (
          <BottomNavigation currentScreen={currentScreen} onNavigate={(screen) => setCurrentScreen(screen)} />
       )}
     </div>

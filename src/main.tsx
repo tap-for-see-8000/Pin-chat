@@ -3,6 +3,10 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 
+import { initAndroidFeatures } from './services/androidInit';
+
+initAndroidFeatures();
+
 const container = document.getElementById('app') || document.getElementById('root')!;
 createRoot(container).render(
   <StrictMode>

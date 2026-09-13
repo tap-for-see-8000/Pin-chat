@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">pinchat</string>
+    <string name="title_activity_main">pinchat</string>
+    <string name="package_name">com.aistudio.pinchat.kpmd</string>
+    <string name="custom_url_scheme">com.aistudio.pinchat.kpmd</string>
+    <string name="accessibility_service_description">PinChat Focus System requires this permission to monitor short-form video usage (Reels/Shorts) and enforce your daily focus limits.</string>
+</resources>

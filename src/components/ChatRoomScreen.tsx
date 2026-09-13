@@ -25,6 +25,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { GoogleGenAI } from '@google/genai';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft,
@@ -70,7 +71,8 @@ import {
 } from '../userService';
 import { LiveLocationRadar } from './LiveLocationRadar';
 import { ChatProfilePanel } from './ChatProfilePanel';
-import { db } from '../firebase';
+import { db, rtdb } from '../firebase';
+import { ref, onValue } from 'firebase/database';
 import {
   collection,
   doc,
@@ -121,6 +123,8 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   const [micActive, setMicActive] = useState(false);
   const [micNotice, setMicNotice] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
 
   // Stealth Gemini AI Auto-Reply State (Default ON, with selected Conversation Style)
   const initialSettings = getChatAutoReplySettings(chatId, currentUser.username);
@@ -143,6 +147,32 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   const [showProfileModal, setShowProfileModal] = useState<boolean>(false);
   const [targetUserGoal, setTargetUserGoal] = useState<any>(null);
   const [liveTargetUser, setLiveTargetUser] = useState<PublicUserProfile>(targetUser);
+
+  useEffect(() => {
+    let unsubFirestore = () => {};
+    let unsubRtdb = () => {};
+    
+    if (rtdb) {
+      const userRefRtdb = ref(rtdb, 'users/' + targetUser.username.toLowerCase());
+      unsubRtdb = onValue(userRefRtdb, (snap) => {
+        if (snap.exists()) {
+          setLiveTargetUser(prev => ({ ...prev, ...snap.val() }));
+        }
+      });
+    } else if (db) {
+      const userRef = doc(db, 'users', targetUser.username.toLowerCase());
+      unsubFirestore = onSnapshot(userRef, (docSnap) => {
+        if (docSnap.exists()) {
+          setLiveTargetUser(prev => ({ ...prev, ...(docSnap.data() as any) }));
+        }
+      });
+    }
+    
+    return () => {
+      unsubFirestore();
+      unsubRtdb();
+    };
+  }, [targetUser.username]);
 
   // Synchronized refs for listeners
   const isAutoReplyEnabledRef = useRef(isAutoReplyEnabled);
@@ -774,50 +804,71 @@ export const ChatRoomScreen: React.FC<ChatRoomScreenProps> = ({
   };
 
   // Microphone helper
-  const handleMicClick = () => {
-    const SpeechRecognition =
-      (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any })
-        .SpeechRecognition ||
-      (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any })
-        .webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      setMicNotice('Voice speech recognition not supported in this browser.');
-      setTimeout(() => setMicNotice(null), 3000);
+  const handleMicClick = async () => {
+    if (micActive && mediaRecorderRef.current) {
+      // Stop recording
+      mediaRecorderRef.current.stop();
+      setMicActive(false);
       return;
     }
-
+    
     try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'hi-IN,en-IN';
-      recognition.interimResults = false;
-
-      recognition.onstart = () => {
-        setMicActive(true);
-        setMicNotice('Listening... Speak now');
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+      
+      mediaRecorder.ondataavailable = e => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
       };
-
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        if (transcript) {
-          setInputText((prev) => (prev ? `${prev} ${transcript}` : transcript));
-        }
+      
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+          const base64Audio = (reader.result as string).split(',')[1];
+          setMicNotice('Transcribing...');
+          try {
+            const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+            if (!apiKey) throw new Error("API Key missing");
+            const ai = new GoogleGenAI({ apiKey });
+            const response = await ai.models.generateContent({
+               model: 'gemini-3.5-transcribe',
+               contents: [{
+                  role: 'user',
+                  parts: [
+                     {
+                       inlineData: {
+                          mimeType: 'audio/webm',
+                          data: base64Audio
+                       }
+                     },
+                     { text: 'Transcribe this audio exactly as spoken.' }
+                  ]
+               }]
+            });
+            const transcript = response.text || '';
+            setInputText(prev => prev ? `${prev} ${transcript}` : transcript);
+            setMicNotice(null);
+          } catch(err) {
+             console.error('Transcription error:', err);
+             setMicNotice('Transcription failed.');
+             setTimeout(() => setMicNotice(null), 3000);
+          }
+        };
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
       };
-
-      recognition.onerror = () => {
-        setMicActive(false);
-        setMicNotice('Microphone access unavailable or timed out.');
-        setTimeout(() => setMicNotice(null), 3000);
-      };
-
-      recognition.onend = () => {
-        setMicActive(false);
-        setMicNotice(null);
-      };
-
-      recognition.start();
-    } catch {
-      setMicActive(false);
+      
+      mediaRecorder.start();
+      setMicActive(true);
+      setMicNotice('Listening... Tap mic again to stop');
+    } catch (err) {
+      console.error('Mic access denied:', err);
+      setMicNotice('Microphone access denied or unavailable.');
+      setTimeout(() => setMicNotice(null), 3000);
     }
   };
 

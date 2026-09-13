@@ -22,6 +22,7 @@ import {
   onAuthStateChanged,
   User,
 } from 'firebase/auth';
+import { getDatabase, Database } from 'firebase/database';
 import {
   initializeFirestore,
   getFirestore,
@@ -121,6 +122,18 @@ if (firestoreInstance && !isRealApiKeyConfigured) {
 }
 
 export const db = firestoreInstance;
+
+// Realtime Database Initialization
+let rtdbInstance: Database | null = null;
+if (appInstance) {
+  try {
+    rtdbInstance = getDatabase(appInstance);
+  } catch {
+    rtdbInstance = null;
+  }
+}
+export const rtdb = rtdbInstance;
+
 
 // Local session key in localStorage
 const LOCAL_ANON_UID_KEY = 'pinchat_anon_uid';

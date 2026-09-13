@@ -3,7 +3,8 @@ import { X, Lock, Unlock, Clock, Activity, Target, Flame, Users, BookOpen, Arrow
 import { UserRecord, PublicUserProfile, SecretCapsule } from '../types';
 import { getFriendCount, createSecretCapsule, getSecretCapsulesForUser, unlockSecretCapsule } from '../userService';
 import { motion, AnimatePresence } from 'motion/react';
-import { db } from '../firebase';
+import { db, rtdb } from '../firebase';
+import { ref, onValue } from 'firebase/database';
 import { doc, onSnapshot } from 'firebase/firestore';
 
 interface ChatProfilePanelProps {
@@ -29,15 +30,29 @@ export const ChatProfilePanel: React.FC<ChatProfilePanelProps> = ({ targetUser, 
   }, [targetUser.username]);
 
   useEffect(() => {
-    if (!db) return;
-    const userRef = doc(db, 'users', targetUser.username.toLowerCase());
-    const unsub = onSnapshot(userRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data() as any;
-        setLiveTargetUser(prev => ({ ...prev, ...data }));
-      }
-    });
-    return () => unsub();
+    let unsubFirestore = () => {};
+    let unsubRtdb = () => {};
+    
+    if (rtdb) {
+      const userRefRtdb = ref(rtdb, 'users/' + targetUser.username.toLowerCase());
+      unsubRtdb = onValue(userRefRtdb, (snap) => {
+        if (snap.exists()) {
+          setLiveTargetUser(prev => ({ ...prev, ...snap.val() }));
+        }
+      });
+    } else if (db) {
+      const userRef = doc(db, 'users', targetUser.username.toLowerCase());
+      unsubFirestore = onSnapshot(userRef, (docSnap) => {
+        if (docSnap.exists()) {
+          setLiveTargetUser(prev => ({ ...prev, ...(docSnap.data() as any) }));
+        }
+      });
+    }
+    
+    return () => {
+      unsubFirestore();
+      unsubRtdb();
+    };
   }, [targetUser.username]);
 
   useEffect(() => {
